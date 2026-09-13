@@ -529,8 +529,10 @@ REM      so a box pushed twice could slide back into its new neighbour;
 REM   2) collapsing one expanded box sent every pushed box home, even when
 REM      another expanded box was still occupying that original slot;
 REM   3) the height animation wrote the whole geometry (including position),
-REM      so expanding a box that was still being pushed froze it mid-slide.
-REM This probe drives all three sequences and fails if any pair overlaps.
+REM      so expanding a box that was still being pushed froze it mid-slide;
+REM   4) a stale slide-home completion flag cleared the rest position after
+REM      the box was pushed again, so it never returned to its original spot.
+REM This probe drives all four sequences and fails if any pair overlaps.
 REM ---------------------------------------------------------------------------
 echo.
 echo ==========================================================

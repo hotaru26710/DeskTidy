@@ -2303,6 +2303,17 @@ void FloatingBoxWidget::slideByForLayout(int dy)
         m_layoutOffset = 0;
     }
 
+    // ⚠️ 取消上一轮"滑回原位"遗留的清理意图。
+    //
+    // 时序：窗口正在滑回原位（m_restClearPending=true），动画没结束就又被
+    // 另一个展开的浮窗推下去。此时 animatePosTo 会 stop() 旧的回家动画并
+    // 启动新的下推动画；stop() 不发 finished，所以旧 pending 会一直挂着。
+    // 若不在新推动开始时取消它，新的下推动画结束时就会误以为"这次是回家
+    // 结束"，把 m_hasRestPos 清掉。后果正是主人现在遇到的：第三个浮窗
+    // 被推下去后，最后所有浮窗收回，它却不再被当作 pushedAside，永远停在
+    // 中间位置回不去原位。
+    m_restClearPending = false;
+
     // ⚠️ 累加，而不是覆盖 —— 这里正是"二次推开会重叠"的修复点。
     //
     // dy 来自 computePushDown，语义是"相对它拿到的矩形（= 窗口当前**稳定**

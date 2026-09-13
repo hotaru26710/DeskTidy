@@ -37,6 +37,12 @@
 //       曾经高度动画写整个 geometry（连位置一起写），会把位移动画接管掉，
 //       乙永远停在半路；同时下一轮推挤又按这个中间位置去量丙，最终重新叠上。
 //
+//   [D] "滑回原位"的完成标记没有在再次被推开时取消。
+//       第三个浮窗正要回原位，半路又被仍展开的第二个推下去；旧的
+//       m_restClearPending 留到了新的下推动画结束，于是误清掉原位基线。
+//       最后所有浮窗都收起时，第三个不再认为自己被推开过，便永远停在
+//       中间位置回不到最初的原位。[D][E][F] 覆盖这条完整链路。
+//
 // 判据就是最朴素的一条：同一块屏幕上，任意两个**展开的**浮窗都不该在
 // 纵向重叠（横向本来就并排的除外，本探针三个窗口横向完全重合）。
 // ---------------------------------------------------------------------------
@@ -266,6 +272,64 @@ int main(int argc, char *argv[])
           QStringLiteral("★ 快速连续展开后甲、乙不重叠"), out);
     check(!overlaps(bFast, cFast),
           QStringLiteral("★ 快速连续展开后乙、丙不重叠"), out);
+
+    // =======================================================================
+    out << "\n[D] 第三个浮窗展开再收回：应回到展开前那个稳定位置\n";
+    // =======================================================================
+    // 前两个已经展开并把第三个推到了合法位置。第三个自己再展开、再收回，
+    // 它应当回到"展开前已经被前两个推到的位置"，不能继续往下漂。
+    resetTo(100, 200, 450);
+    expandIfRolled(a);
+    expandIfRolled(b);
+    pump(500);
+    const QRect cBeforeThirdExpand = c.rect();
+    expandIfRolled(c);
+    collapseIfExpanded(c);
+    pump(700);
+    const QRect cAfterThirdCollapse = c.rect();
+    out << "  第三个展开前：丙 " << rectText(cBeforeThirdExpand)
+        << "；收回后：丙 " << rectText(cAfterThirdCollapse) << "\n";
+    check(cAfterThirdCollapse.top() == cBeforeThirdExpand.top(),
+          QStringLiteral("★ 第三个收回后回到展开前的稳定位置"), out);
+
+    // =======================================================================
+    out << "\n[E] 第三个浮窗快速展开又收回：也不能漂到别处\n";
+    // =======================================================================
+    // 模拟鼠标扫过：第三个刚开始展开就立刻收回，此时高度/位置动画都还没落定。
+    resetTo(100, 200, 450);
+    expandIfRolled(a);
+    expandIfRolled(b);
+    pump(500);
+    const QRect cBeforeFastToggle = c.rect();
+    doubleClickTitle(c.w);      // 第三个开始展开
+    pump(30);                   // 不等落定
+    doubleClickTitle(c.w);      // 立刻收回
+    pump(1200);
+    const QRect cAfterFastToggle = c.rect();
+    out << "  快速展开收回前：丙 " << rectText(cBeforeFastToggle)
+        << "；收回后：丙 " << rectText(cAfterFastToggle) << "\n";
+    check(cAfterFastToggle.top() == cBeforeFastToggle.top(),
+          QStringLiteral("★ 快速展开再收回后仍回到展开前位置"), out);
+
+    // =======================================================================
+    out << "\n[F] 第三个收回后，前两个再收回：所有浮窗都回原位\n";
+    // =======================================================================
+    // 完整检查第三个浮窗的让位基线没有被它自己的展开/收回清掉：
+    // 甲、乙后来也收起时，丙必须从被推位置回到最初的原位。
+    resetTo(100, 200, 450);
+    expandIfRolled(a);
+    expandIfRolled(b);
+    pump(500);
+    expandIfRolled(c);
+    collapseIfExpanded(c);
+    pump(500);
+    collapseIfExpanded(a);
+    collapseIfExpanded(b);
+    pump(900);
+    const QRect cAfterAllCollapse = c.rect();
+    out << "  甲、乙也收回后：丙 " << rectText(cAfterAllCollapse) << "\n";
+    check(cAfterAllCollapse.top() == 450,
+          QStringLiteral("★ 所有浮窗收回后丙回到最初原位 y=450"), out);
 
     // =======================================================================
     out << "\n=== 结果：" << gPass << " 通过 / " << gFail << " 失败 ===\n";
