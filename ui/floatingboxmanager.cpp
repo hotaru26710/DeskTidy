@@ -509,7 +509,11 @@ QList<WindowLayout::Item> FloatingBoxManager::layoutItemsExcept(FloatingBoxWidge
         // ⚠️ 用 frameGeometry 而不是 geometry：无边框窗口两者相同，
         // 但将来若加了阴影/边框边距，只有 frameGeometry 才是屏幕上
         // 真正占位的那块。WindowLayout 的注释里也是这么约定的。
-        item.rect = w->frameGeometry();
+        //
+        // ⚠️ 位置取的是"让位动画落定后的终值"（layoutStableGeometry），
+        // 而不是当前这一帧。连续快速让位时上一轮滑动还没跑完，用中间帧
+        // 计算会让位移偏掉、把窗口叠在一起（见该函数的注释）。
+        item.rect = w->layoutStableGeometry();
         // 用 availableGeometry 而不是 geometry：要避开任务栏，
         // 否则会把浮窗推到任务栏底下（那里看着是空的，实际点不到）。
         item.screenRect = scr->availableGeometry();
@@ -543,24 +547,54 @@ void FloatingBoxManager::relayoutAround(FloatingBoxWidget *anchor, bool expanded
     // 用几何重算反而会引入误差（比如某个浮窗在此期间被主人手动挪过，
     // 重算会把它按几何摆到另一个地方，而不是它原本待的地方）。
     //
-    // ⚠️ 已知的简化：**多个锚点同时展开**时，收起其中一个会把
-    // 另一个推开的窗口也一起收回原位。
+    // ⚠️ 历史：这里曾经有个"已知的简化" —— 多个锚点同时展开时，
+    // 收起其中一个会把另一个推开的窗口也一起收回原位，导致重叠。
     //
-    // 例：A 展开推下 C；B 也展开（它不再需要推 C，C 已经在下面了）；
-    // 此时 A 收起 —— C 会滑回原位，尽管 B 还展开着、本来仍需要压着 C。
-    // 结果是 C 与 B 叠在一起，直到下一次有人展开/收起才会修正。
+    // 例：A 展开推下 C；B 也展开（C 已经在下面，B 不需要再推它）；
+    // 此时 A 收起 —— C 滑回原位，可 B 还展开着、本来就压在那个位置。
+    // 结果是 C 与 B 叠在一起，要等下一次展开/收起才自愈。
     //
-    // 没有为它加"谁推的 C"这套记账，理由是：
-    //   * 需要给每个被推者记一份"被谁推的"，而推动是连锁的
-    //     （A 推 B、B 又推 C），归因会变成一张复杂的依赖图；
-    //   * 收尾方式很廉价 —— 主人接着点任意一个浮窗，协调就会重算并自愈；
-    //   * 真机上的多锚点同时展开本来就是罕见操作。
-    // 这是**刻意的取舍**，不是遗漏。若日后发现主人常这么用，再补记账。
+    // 现在改成"先归位、再让仍然展开的浮窗重推一遍"（见下面这段）：
+    // C 先回到原位，紧接着被 B 重新推到 B 下方，不再重叠。
+    // 不需要维护"谁推的 C"那张依赖图 —— 当前仍展开的窗口的真实占位
+    // 就是答案，直接重算即可。
     if (!expanded) {
         for (FloatingBoxWidget *w : std::as_const(m_widgets)) {
             if (w && w != anchor && w->isPushedAside()) {
                 w->slideByForLayout(0);     // 0 == "滑回原位"
             }
+        }
+
+        // 归位之后再让**仍然展开着**的其他浮窗重推一遍。
+        //
+        // 这一步不能省：上面那句只是"滑回原位"，而原位此刻可能仍然被
+        // 另一个展开的浮窗占着。归位目标已经写进位移动画，而
+        // layoutStableGeometry() 会读动画终值，所以这里重算时看到的是
+        // C 归位后的位置，能正确把它再推到 B 下方。
+        //
+        // 顺序按 y 排：让靠上的锚点先推，与 computePushDown 内部
+        // "上面先让开、下面再基于已让开的位置判断"保持一致，结果才稳定。
+        QList<FloatingBoxWidget *> stillExpanded;
+        for (FloatingBoxWidget *w : std::as_const(m_widgets)) {
+            if (!w || w == anchor) {
+                continue;
+            }
+            if (w->isRolledUp() || w->isLocked() || !w->isVisible()) {
+                continue;   // 卷起的/钉住的/不可见的不占地方，也不推别人
+            }
+            stillExpanded.append(w);
+        }
+        std::sort(stillExpanded.begin(), stillExpanded.end(),
+                  [](FloatingBoxWidget *a, FloatingBoxWidget *b) {
+                      const QRect ra = a->frameGeometry();
+                      const QRect rb = b->frameGeometry();
+                      if (ra.y() != rb.y()) return ra.y() < rb.y();
+                      if (ra.x() != rb.x()) return ra.x() < rb.x();
+                      return a->boxName() < b->boxName();
+                  });
+
+        for (FloatingBoxWidget *w : std::as_const(stillExpanded)) {
+            relayoutAround(w, true);
         }
         return;
     }
@@ -577,9 +611,10 @@ void FloatingBoxManager::relayoutAround(FloatingBoxWidget *anchor, bool expanded
     // 所以此刻 frameGeometry() 还是卷起时那条 30px 的细线。
     // 直接拿它去算等于"展开不会推开任何人"（细线挡不住谁）。
     //
-    // 解决办法：不用当前几何，而是问浮窗"你展开后会有多高"。
-    // expandedGeometry() 返回的就是动画的终值尺寸。
-    const QRect anchorTarget = anchor->expandedGeometry();
+    // 解决办法：不用当前几何，而是问浮窗"这轮让位动画落定后会在哪、
+    // 会有多高"。layoutStableGeometry() 同时取高度与位置动画的终值，
+    // 所以即使锚点自己还在被别的浮窗推着，也能算出正确目标。
+    const QRect anchorTarget = anchor->layoutStableGeometry();
 
     const QList<WindowLayout::Shift> shifts =
         WindowLayout::computePushDown(anchor->boxName(),

@@ -430,16 +430,16 @@ FloatingBoxWidget::FloatingBoxWidget(AppService *service,
     //
     // 时长比透明度略长一点：高度变化是"形体改变"，比"明暗变化"更抢眼，
     // 用同一个时长会显得太仓促。
-    m_heightAnim = new QPropertyAnimation(this, "geometry", this);
+    m_heightAnim = new QPropertyAnimation(this, "size", this);
     m_heightAnim->setDuration(kRollDurationMs);
     m_heightAnim->setEasingCurve(QEasingCurve::OutCubic);
 
     // 位置动画（被其他浮窗推开时的平移）。
     //
-    // ⚠️ 动的是 "pos" 而不是 "geometry"：同一时刻高度动画正在动 geometry，
-    // 两个动画都写 geometry 会互相覆盖 —— 被推开的那个浮窗若恰好也在
-    // 卷起/展开，两个动画会各写一帧、对方再写回来，表现为窗口在原地抽搐。
-    // pos 只含位置，与 heightAnim 的尺寸维度正交，可以安全地同时跑。
+    // ⚠️ 高度动画动的是 "size"、这里动的是 "pos"：两者严格正交，可以
+    // 同时跑。历史上高度动画动的是 "geometry"（连位置一起写），被推开的
+    // 浮窗若恰好也在卷起/展开，两个动画就会争抢同一个属性，表现为窗口
+    // 停在让位中途、与旁边窗口重叠。改成只动 size 后两个动画不再打架。
     //
     // 时长比高度略短（200 vs 220）：让位是"给别人腾地方"，应当比
     // "自己变形"更利落一点；两者接近则看着像同一套动作。
@@ -483,6 +483,7 @@ FloatingBoxWidget::FloatingBoxWidget(AppService *service,
         if (m_restClearPending) {
             m_restClearPending = false;
             m_hasRestPos = false;
+            m_layoutOffset = 0;     // 基线没了，累计偏移一起归零
         }
     });
 
@@ -1782,11 +1783,10 @@ void FloatingBoxWidget::animateHeightTo(int targetHeight)
     // 晚一步就会漏掉第一帧的记录。
     m_rollAnimating = true;
 
-    const QRect startRect = geometry();
+    const QSize startSize = size();
     m_heightAnim->setDuration(kRollDurationMs);
-    m_heightAnim->setStartValue(startRect);
-    m_heightAnim->setEndValue(QRect(startRect.x(), startRect.y(),
-                                    startRect.width(), targetHeight));
+    m_heightAnim->setStartValue(startSize);
+    m_heightAnim->setEndValue(QSize(startSize.width(), targetHeight));
 
     // finished 只连一次（动画对象是全生命周期复用的，常连会累积重复回调）。
     // ---- 预置遮罩，让动画的每一帧都不必碰原生窗口区域 ----
@@ -1798,7 +1798,7 @@ void FloatingBoxWidget::animateHeightTo(int targetHeight)
     // 多出来的部分落在窗口之外，看不见；反过来才会裁掉真实内容。
     // 代价是动画期间窗口底边暂时是直角（圆角被推到窗口下方裁掉了），
     // 220ms 的形体变化里肉眼基本抓不住，且落定后立刻精确复位。
-    ensureRoundedMaskCovers(qMax(startRect.height(), targetHeight));
+    ensureRoundedMaskCovers(qMax(startSize.height(), targetHeight));
 
     connect(m_heightAnim, &QPropertyAnimation::finished, this, [this, targetHeight]() {
         // 动画结束：清标志，让 resizeEvent 恢复记录展开高度。
@@ -2256,6 +2256,11 @@ void FloatingBoxWidget::slideByForLayout(int dy)
 
         const QPoint back = m_restPos;
 
+        // 目标回到原位，累计偏移随之归零。必须赶在 animatePosTo 之前清：
+        // 若滑回途中又来了新的"被推开"请求，slideByForLayout 要能从这个 0
+        // 起累加，算出来的目标才是"原位 + 新位移"，而不是被旧偏移顶出去。
+        m_layoutOffset = 0;
+
         // ⚠️ 基线要等到**真的滑回去之后**才能清，不能在这里清。
         //
         // 若在这里清，而滑回动画还没跑完时又来了一个"被推开"请求
@@ -2295,9 +2300,20 @@ void FloatingBoxWidget::slideByForLayout(int dy)
     if (!m_hasRestPos) {
         m_restPos = pos();
         m_hasRestPos = true;
+        m_layoutOffset = 0;
     }
 
-    animatePosTo(m_restPos + QPoint(0, dy));
+    // ⚠️ 累加，而不是覆盖 —— 这里正是"二次推开会重叠"的修复点。
+    //
+    // dy 来自 computePushDown，语义是"相对它拿到的矩形（= 窗口当前**稳定**
+    // 位置）还要往下挪多少"，而稳定位置 = m_restPos + m_layoutOffset。
+    // 所以新目标偏移 = 旧偏移 + dy。
+    //
+    // 写成"目标 = m_restPos + dy"（覆盖）时，第一次推没事（此时偏移为 0），
+    // 第二次就会把已经推开的那一段抹掉：窗口不降反升，与第二个锚点叠在一起。
+    m_layoutOffset += dy;
+
+    animatePosTo(m_restPos + QPoint(0, m_layoutOffset));
 }
 
 // 展开后会占据的矩形。
@@ -2313,10 +2329,34 @@ QRect FloatingBoxWidget::expandedGeometry() const
     // 的取值逻辑，两处必然漂移 —— 而漂移的表现是"推开的位置差一点点"，
     // 肉眼几乎看不出来但会一直存在。
     if (m_heightAnim && m_heightAnim->state() == QAbstractAnimation::Running) {
-        return m_heightAnim->endValue().toRect();
+        QRect rect = frameGeometry();
+        rect.setSize(m_heightAnim->endValue().toSize());
+        return rect;
     }
 
     return frameGeometry();
+}
+
+// 让位动画全部落定后会处的矩形。
+//
+// 与 expandedGeometry 的区别：那个只取高度动画的终值；这里还要把**位置**
+// 动画的终值算进来。连续快速让位时 frameGeometry() 只是中间帧，
+// 用它算位移会让第二轮偏掉（见头文件的说明）。
+QRect FloatingBoxWidget::layoutStableGeometry() const
+{
+    QRect rect = frameGeometry();
+
+    // 高度动画在跑：用终值高度 —— 被推窗口自身的高度决定它占多少垂直空间。
+    if (m_heightAnim && m_heightAnim->state() == QAbstractAnimation::Running) {
+        rect.setSize(m_heightAnim->endValue().toSize());
+    }
+
+    // 位置动画在跑：用终值位置 —— 这一轮落定后它才会停在那里。
+    if (m_posAnim && m_posAnim->state() == QAbstractAnimation::Running) {
+        rect.moveTopLeft(m_posAnim->endValue().toPoint());
+    }
+
+    return rect;
 }
 
 void FloatingBoxWidget::setPosImmediately(const QPoint &target)
