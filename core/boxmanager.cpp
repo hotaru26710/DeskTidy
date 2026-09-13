@@ -2,6 +2,7 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QDirIterator>
 #include <QFileInfo>
 
 #include <algorithm>
@@ -21,13 +22,24 @@ namespace BoxManager {
 namespace {
 
 // 统计一个目录的直接子项数量。取不到时返回 0（比抛错更符合 UI 期待）。
+//
+// 过滤条件与原先的 entryList() 逐字一致，只是不再把每个名字都物化成
+// 一个 QString：listBoxes() 对**每个盒子**调一次这里，盒子里有多少条目
+// 就要白白构造、再丢掉多少个字符串对象。迭代器版本只走一遍目录、数数。
 int countChildren(const QString &dirPath)
 {
     QDir dir(dirPath);
     if (!dir.exists())
         return 0;
-    return dir.entryList(QDir::AllEntries | QDir::NoDotAndDotDot,
-                         QDir::NoSort).size();
+
+    int count = 0;
+    QDirIterator it(dirPath, QDir::AllEntries | QDir::NoDotAndDotDot,
+                    QDirIterator::NoIteratorFlags);
+    while (it.hasNext()) {
+        it.next();
+        ++count;
+    }
+    return count;
 }
 
 // 由完整路径填出 DesktopEntry，供 listBoxItems 复用。

@@ -1735,6 +1735,11 @@ void FloatingBoxWidget::setHeightImmediately(int targetHeight)
     m_rollAnimating = false;
 
     resize(width(), targetHeight);
+
+    // 没有动画时遮罩本该由 resizeEvent 精确重建；但 resize() 在目标高度恰好
+    // 等于当前高度时不会触发 resizeEvent，遮罩可能还停在上一段动画那张
+    // "偏大"的版本上（表现是底边两角变直角）。补一次收尾。
+    settleRoundedMask();
 }
 
 void FloatingBoxWidget::animateHeightTo(int targetHeight)
@@ -1784,6 +1789,17 @@ void FloatingBoxWidget::animateHeightTo(int targetHeight)
                                     startRect.width(), targetHeight));
 
     // finished 只连一次（动画对象是全生命周期复用的，常连会累积重复回调）。
+    // ---- 预置遮罩，让动画的每一帧都不必碰原生窗口区域 ----
+    //
+    // 一次生成"这段动画可能出现的最大高度"的圆角遮罩并下发，之后整段动画
+    // 的 resizeEvent 都会命中 ensureRoundedMaskCovers 的复用分支。
+    //
+    // 遮罩比窗口大是**安全**的：原生窗口区域的语义是"遮罩 ∩ 窗口矩形"，
+    // 多出来的部分落在窗口之外，看不见；反过来才会裁掉真实内容。
+    // 代价是动画期间窗口底边暂时是直角（圆角被推到窗口下方裁掉了），
+    // 220ms 的形体变化里肉眼基本抓不住，且落定后立刻精确复位。
+    ensureRoundedMaskCovers(qMax(startRect.height(), targetHeight));
+
     connect(m_heightAnim, &QPropertyAnimation::finished, this, [this, targetHeight]() {
         // 动画结束：清标志，让 resizeEvent 恢复记录展开高度。
         m_rollAnimating = false;
@@ -1793,6 +1809,10 @@ void FloatingBoxWidget::animateHeightTo(int targetHeight)
         // 而卷起态的高度必须是精确的（后续 setMinimumHeight/MaximumHeight
         // 会拿它当基准），差一点会让"卷起后还是能拉出一点缝"。
         resize(width(), targetHeight);
+
+        // 高度定下来了，把动画期间那张"偏大"的遮罩换成与窗口严格等大的版本。
+        // （resize() 若真的改了尺寸，resizeEvent 里已经精确重建过，这里是空操作。）
+        settleRoundedMask();
 
         // 尺寸定下来了，落一次盘。
         // 动画期间的 resizeEvent 每次都会重开去抖定时器，所以真正的落盘
@@ -2404,17 +2424,15 @@ void FloatingBoxWidget::setLocked(bool locked)
 // ---------------------------------------------------------------------------
 // 圆角遮罩
 // ---------------------------------------------------------------------------
-void FloatingBoxWidget::updateRoundedMask()
+void FloatingBoxWidget::applyRoundedMask(int w, int h)
 {
-    // 尺寸还没定（构造期 width/height 可能还是默认的 640x480）时先跳过，
-    // resizeEvent 会在真正显示前再调一次。
-    if (width() <= 0 || height() <= 0) {
+    if (w <= 0 || h <= 0) {
         return;
     }
 
     // 用一个抗锯齿的位图 mask，而不是直接 Region。
     // 直接 QRegion 是硬边、四角会有明显锯齿；8px 半径下用位图画能磨平。
-    QBitmap mask(width(), height());
+    QBitmap mask(w, h);
     mask.fill(Qt::color0);          // 先全透明
 
     QPainter painter(&mask);
@@ -2425,11 +2443,64 @@ void FloatingBoxWidget::updateRoundedMask()
 
     // 内缩半像素：抗锯齿的边界会落在半个像素上，不内缩的话最外一圈
     // 会被削掉一像素，圆角看着比 8px 小一点。
-    painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5),
+    painter.drawRoundedRect(QRectF(0, 0, w, h).adjusted(0.5, 0.5, -0.5, -0.5),
                             kCornerRadius, kCornerRadius);
     painter.end();
 
+    m_maskBitmap = mask;
+    m_maskSize   = QSize(w, h);
     setMask(mask);
+}
+
+void FloatingBoxWidget::updateRoundedMask()
+{
+    // 尺寸还没定（构造期 width/height 可能还是默认的 640x480）时先跳过，
+    // resizeEvent 会在真正显示前再调一次。
+    if (width() <= 0 || height() <= 0) {
+        return;
+    }
+
+    // 精确重建，并与当前窗口严格等大。
+    //
+    // ⚠️ 这里刻意**不做"尺寸没变就跳过"**：applyAlwaysOnTop 会 setWindowFlags，
+    // 那会重建原生窗口，而遮罩是原生窗口的属性 —— 那条路径需要无条件重设一次
+    // 作为防御（见该函数末尾的说明）。走缓存跳过会把这层防御悄悄抹掉。
+    applyRoundedMask(width(), height());
+}
+
+void FloatingBoxWidget::settleRoundedMask()
+{
+    // 动画落定后调用。已经严格等大就什么都不用做；
+    // 否则（动画期间用的是"偏大"的遮罩）在这里补一次精确重建。
+    //
+    // 与 updateRoundedMask 的差别只有一个前提：这里的场景不涉及重建原生窗口，
+    // 所以"已经精确匹配"时允许直接返回。
+    if (width() <= 0 || height() <= 0) {
+        return;
+    }
+    if (!m_maskBitmap.isNull() && m_maskSize == size()) {
+        return;
+    }
+    applyRoundedMask(width(), height());
+}
+
+void FloatingBoxWidget::ensureRoundedMaskCovers(int minHeight)
+{
+    const int w = width();
+    const int h = qMax(height(), minHeight);
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+
+    // 现有遮罩已经完整覆盖窗口 -> 原地复用，不重画、不 setMask()。
+    if (!m_maskBitmap.isNull() && m_maskSize.width() == w
+        && m_maskSize.height() >= h) {
+        return;
+    }
+
+    // 必须重设：宽度变了，或窗口长过了现有遮罩。
+    // 绝不能生成比窗口矮的遮罩 —— 那会把窗口底部一块真实内容裁掉。
+    applyRoundedMask(w, h);
 }
 
 // ---------------------------------------------------------------------------
@@ -2555,7 +2626,21 @@ void FloatingBoxWidget::resizeEvent(QResizeEvent *event)
 
     // 圆角遮罩必须跟着尺寸重算 —— mask 是按当前像素尺寸生成的位图，
     // 尺寸一变它就失配（表现为圆角错位或干脆消失）。
-    updateRoundedMask();
+    //
+    // ⚠️ 唯一的例外是高度动画（m_rollAnimating）。卷起/展开会连续 220ms
+    // 每帧改一次高度，而 setMask() 是"把遮罩转成原生窗口区域"的平台调用：
+    // 离屏实测约 800us/次，**与区域复杂度无关**（连一个平凡矩形也要 813us，
+    // 见 tools/mask_perf.cpp）—— 那笔开销是每帧钉在 resize 路径上的。
+    //
+    // 所以动画期间退成"够用就行"：只在窗口长过现有遮罩时才重设，
+    // 缩小方向一次都不碰。animateHeightTo 启动前已经把遮罩预先撑到
+    // 这段动画可能出现的最大高度，正常情况下一帧都不会走到重设分支；
+    // 动画结束时由 finished 回调 settleRoundedMask() 把圆角精确复位。
+    if (m_rollAnimating) {
+        ensureRoundedMaskCovers(height());
+    } else {
+        updateRoundedMask();
+    }
 
     // 记住"展开状态下的高度"，供卷起后展开时恢复。
     //

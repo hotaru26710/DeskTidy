@@ -62,6 +62,20 @@ QList<Shift> computePushDown(const QString &anchorId,
     // 键是 id，值是应用位移之后的矩形。
     QHash<QString, QRect> settled;
 
+    // 障碍列表在一整轮循环里**只分配一份**：下标 0 恒为 anchorTarget，
+    // 之后按"落定顺序"追加被推开的窗口。
+    //
+    // 原先每个 item 都现场重建一份 { anchorTarget } ∪ settled ——
+    // 每个 item 一次 O(n) 分配，整轮就是 O(n²) 的堆压力，而这个函数会在
+    // 展开/卷起的动画里被反复调用。
+    //
+    // 复用是等价的：pushBelow 只取"所有障碍里最深的那条底边"，
+    // 结果与遍历顺序无关；而 append 的时机与 settled.insert 严格一致，
+    // 所以两者在任何时刻都是同一个集合。
+    QList<QRect> blockers;
+    blockers.reserve(sorted.size());
+    blockers.append(anchorTarget);
+
     // 把 rect 向下推到"不再与 blockers 中任何一个相交"为止。
     //
     // 这是"连锁下推"的核心：被推者让开之后，可能正好压住排在它下面的
@@ -161,12 +175,6 @@ QList<Shift> computePushDown(const QString &anchorId,
         // ⚠️ 还踩过一次"重复计入 anchor"：anchorTarget 本身已经在
         // overlapsHorizontally 那一关用过了，但若把它排除在 blockers 之外，
         // 被推者就只会被已落定者推、不会被 anchor 推，连锁的起点就没了。
-        QList<QRect> blockers;
-        blockers.reserve(settled.size() + 1);
-        blockers.append(anchorTarget);
-        for (auto it = settled.constBegin(); it != settled.constEnd(); ++it) {
-            blockers.append(it.value());
-        }
         int dy = pushBelow(current, blockers);
 
         // ⚠️ 边界钳制：不推出屏幕下沿。
@@ -190,7 +198,9 @@ QList<Shift> computePushDown(const QString &anchorId,
         shift.dy = dy;
         shifts.append(shift);
 
-        settled.insert(item.id, current.translated(0, dy));
+        const QRect settledRect = current.translated(0, dy);
+        settled.insert(item.id, settledRect);
+        blockers.append(settledRect);
     }
 
     return shifts;

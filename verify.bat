@@ -29,7 +29,7 @@ REM ---- Kill any running instance; a locked exe makes the link step fail ----
 taskkill /IM DeskTidy.exe /F >nul 2>&1
 
 echo ==========================================================
-echo  1/14  Build main application
+echo  1/15  Build main application
 echo ==========================================================
 if exist build-qmake rmdir /s /q build-qmake
 mkdir build-qmake
@@ -58,7 +58,7 @@ cd ..
 
 echo.
 echo ==========================================================
-echo  2/14  Unit tests (pure logic)
+echo  2/15  Unit tests (pure logic)
 echo ==========================================================
 set TESTOK=1
 
@@ -129,7 +129,7 @@ if "%TESTOK%"=="1" (echo   [OK] unit tests passed) else (set FAILED=1)
 
 echo.
 echo ==========================================================
-echo  3/14  End-to-end verification (real file moves, isolated)
+echo  3/15  End-to-end verification (real file moves, isolated)
 echo ==========================================================
 set E2E=F:\QtProject\DeskTidy\_e2e_tmp
 if exist "%E2E%" rmdir /s /q "%E2E%"
@@ -163,7 +163,7 @@ cd ..\..
 
 echo.
 echo ==========================================================
-echo  4/14  Floating-box signal chain (GUI, no event loop)
+echo  4/15  Floating-box signal chain (GUI, no event loop)
 echo ==========================================================
 REM Verifies the wiring that manual testing finds hardest:
 REM after collect/undo, does the floating window refresh ITSELF via signals?
@@ -192,7 +192,7 @@ REM 5/8  Fade animation timing (real QPropertyAnimation on a real window)
 REM ---------------------------------------------------------------------------
 echo.
 echo ==========================================================
-echo  5/14  Fade animation timing
+echo  5/15  Fade animation timing
 echo ==========================================================
 if exist tools\build-fade rmdir /s /q tools\build-fade
 mkdir tools\build-fade
@@ -230,7 +230,7 @@ REM 6/9  Delete-box probe (real file moves + recycle bin)
 REM ---------------------------------------------------------------------------
 echo.
 echo ==========================================================
-echo  6/14  Delete-box probe (real file moves)
+echo  6/15  Delete-box probe (real file moves)
 echo ==========================================================
 if exist tools\build-del rmdir /s /q tools\build-del
 mkdir tools\build-del
@@ -257,7 +257,7 @@ REM 7/9  View-reset guard probe (regression guard for a real fixed bug)
 REM ---------------------------------------------------------------------------
 echo.
 echo ==========================================================
-echo  7/14  View-reset guard (list <-> icon mode switching)
+echo  7/15  View-reset guard (list <-> icon mode switching)
 echo ==========================================================
 if exist tools\build-viewreset rmdir /s /q tools\build-viewreset
 mkdir tools\build-viewreset
@@ -280,11 +280,11 @@ if errorlevel 1 (set FAILED=1) else (echo   [OK] view-reset guard passed)
 cd ..\..
 
 REM ---------------------------------------------------------------------------
-REM 8/14  Rounded-corner mask verification
+REM 8/15  Rounded-corner mask verification
 REM ---------------------------------------------------------------------------
 echo.
 echo ==========================================================
-echo  8/14  Rounded corners (window mask)
+echo  8/15  Rounded corners (window mask)
 echo ==========================================================
 if exist tools\build-cornermask rmdir /s /q tools\build-cornermask
 mkdir tools\build-cornermask
@@ -307,11 +307,11 @@ if errorlevel 1 (set FAILED=1) else (echo   [OK] rounded corners verified)
 cd ..\..
 
 REM ---------------------------------------------------------------------------
-REM 9/14  Roll-up / expand height animation
+REM 9/15  Roll-up / expand height animation
 REM ---------------------------------------------------------------------------
 echo.
 echo ==========================================================
-echo  9/14  Roll-up height animation
+echo  9/15  Roll-up height animation
 echo ==========================================================
 if exist tools\build-rolldiag rmdir /s /q tools\build-rolldiag
 mkdir tools\build-rolldiag
@@ -338,7 +338,7 @@ if errorlevel 1 (set FAILED=1) else (echo   [OK] roll-up animation passed)
 cd ..\..
 
 REM ---------------------------------------------------------------------------
-REM 10/14  Floating window push-down geometry (WindowLayout)
+REM 10/15  Floating window push-down geometry (WindowLayout)
 REM
 REM Pure geometry, no widgets and no config: it links only windowlayout.cpp,
 REM so it builds and runs in well under a second. It re-checks the same
@@ -349,7 +349,7 @@ REM the anchor never pushes itself) across several realistic arrangements.
 REM ---------------------------------------------------------------------------
 echo.
 echo ==========================================================
-echo  10/14  Floating window push-down geometry
+echo  10/15  Floating window push-down geometry
 echo ==========================================================
 if exist tools\build-windowlayout rmdir /s /q tools\build-windowlayout
 mkdir tools\build-windowlayout
@@ -372,7 +372,7 @@ if errorlevel 1 (set FAILED=1) else (echo   [OK] push-down geometry passed)
 cd ..\..
 
 REM ---------------------------------------------------------------------------
-REM 11/14  Hover auto-expand / auto-collapse
+REM 11/15  Hover auto-expand / auto-collapse
 REM
 REM Drives real QEnterEvent / QEvent::Leave through a real event loop and waits
 REM out the real timer delays, which is the only way to observe this feature.
@@ -382,7 +382,7 @@ REM next fixture's assertions into tautologies. That happened; see its comments.
 REM ---------------------------------------------------------------------------
 echo.
 echo ==========================================================
-echo  11/14  Hover auto-expand / auto-collapse
+echo  11/15  Hover auto-expand / auto-collapse
 echo ==========================================================
 if exist tools\build-hover rmdir /s /q tools\build-hover
 mkdir tools\build-hover
@@ -405,7 +405,7 @@ if errorlevel 1 (set FAILED=1) else (echo   [OK] hover expand/collapse passed)
 cd ..\..
 
 REM ---------------------------------------------------------------------------
-REM 12/14  Push-down / slide animation / pinning
+REM 12/15  Push-down / slide animation / pinning
 REM
 REM The geometry itself (WindowLayout) is already covered by 64 unit tests.
 REM What this stage checks is the WIRING around it: that the anchor's target
@@ -416,7 +416,7 @@ REM that the temporary pushed position never reaches the config file.
 REM ---------------------------------------------------------------------------
 echo.
 echo ==========================================================
-echo  12/14  Push-down / slide animation / pinning
+echo  12/15  Push-down / slide animation / pinning
 echo ==========================================================
 if exist tools\build-pushdown rmdir /s /q tools\build-pushdown
 mkdir tools\build-pushdown
@@ -439,7 +439,7 @@ if errorlevel 1 (set FAILED=1) else (echo   [OK] push-down / pinning passed)
 cd ..\..
 
 REM ---------------------------------------------------------------------------
-REM 13/14  Box item icons (no cross-contamination)
+REM 13/15  Box item icons (no cross-contamination)
 REM
 REM Guards the bug the user hit: "every time I add something, the icons in the
 REM box get scrambled".  Two causes were found and fixed:
@@ -452,7 +452,7 @@ REM this needs a probe that compares icon identity, not just presence.
 REM ---------------------------------------------------------------------------
 echo.
 echo ==========================================================
-echo  13/14  Box item icons
+echo  13/15  Box item icons
 echo ==========================================================
 if exist tools\build-iconprobe rmdir /s /q tools\build-iconprobe
 mkdir tools\build-iconprobe
@@ -472,6 +472,51 @@ if errorlevel 1 (
 )
 release\icon_probe.exe
 if errorlevel 1 (set FAILED=1) else (echo   [OK] item icons passed)
+cd ..\..
+
+
+REM ---------------------------------------------------------------------------
+REM 14/15  Mask behaviour during the height animation
+REM
+REM Guards the optimisation that stopped rebuilding the window mask on every
+REM frame of the roll-up / expand animation.
+REM
+REM setMask() is a platform call: it hands the mask to the native window as a
+REM window region. Measured on this machine it costs ~1.1ms even for a trivial
+REM rectangle -- the cost is in the platform call, not in our bitmap drawing.
+REM The animation resizes the window ~11 times over 220ms, so the old code paid
+REM that ~11 times per roll-up. The new code keeps a mask that is LARGER than
+REM the window while the height animates (native region = mask AND window rect,
+REM so the extra mask lands outside the window and is invisible) and snaps back
+REM to an exact mask once the height settles.
+REM
+REM The one way this could hurt: a mask SHORTER than the window would clip away
+REM real content along the bottom edge. So this probe asserts, frame by frame,
+REM that the mask is never shorter than the window -- and that it is exactly
+REM equal once the animation has settled.
+REM ---------------------------------------------------------------------------
+echo.
+echo ==========================================================
+echo  14/15  Mask behaviour during height animation
+echo ==========================================================
+if exist tools\build-maskanimmask rmdir /s /q tools\build-maskanimmask
+mkdir tools\build-maskanimmask
+cd tools\build-maskanimmask
+qmake ..\mask_anim_diag.pro >nul
+if errorlevel 1 (
+    echo [ERROR] mask anim probe qmake failed
+    set FAILED=1
+    goto :summary
+)
+mingw32-make -j8 > maskanim.log 2>&1
+if errorlevel 1 (
+    echo [ERROR] mask anim probe build failed
+    findstr /C:"error" maskanim.log
+    set FAILED=1
+    goto :summary
+)
+release\mask_anim_diag.exe
+if errorlevel 1 (set FAILED=1) else (echo   [OK] mask during animation verified)
 cd ..\..
 
 REM ---------------------------------------------------------------------------

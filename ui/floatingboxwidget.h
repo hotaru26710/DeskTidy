@@ -40,6 +40,7 @@
 //    决定性理由（列表的拖拽高亮会清空整条样式表）。
 // ---------------------------------------------------------------------------
 
+#include <QBitmap>
 #include <QByteArray>
 #include <QList>
 #include <QPoint>
@@ -494,7 +495,24 @@ private:
     // 代价：mask 是位图裁剪，**尺寸一变就必须重算**（见 resizeEvent），
     // 而且边缘是硬切、没有抗锯齿 —— 用 QPainter 的抗锯齿路径画 mask 可以
     // 缓解，8px 半径下肉眼基本看不出锯齿。
+    //
+    // ⚠️ 这一句是"精确重建"：它一律按当前窗口尺寸重画并调 setMask()，
+    // 不做任何复用判断。理由见实现里的说明（applyAlwaysOnTop 重建过原生窗口）。
     void updateRoundedMask();
+
+    // 按给定尺寸生成圆角遮罩并下发。内部会刷新下面的缓存。
+    void applyRoundedMask(int w, int h);
+
+    // 高度动画期间用的"够大就行"遮罩：保证遮罩**不小于**窗口即可，
+    // 已经覆盖时一个字节都不重算。缩小时完全复用旧遮罩，
+    // 把每帧一次 setMask()（原生窗口区域调用，离屏实测约 800us/次）省掉。
+    //
+    // 安全性：原生窗口区域 = 遮罩 ∩ 窗口矩形，所以"遮罩比窗口大"是无害的；
+    // 反过来（遮罩比窗口小）会裁掉真实内容，这个函数绝不允许出现那种情况。
+    void ensureRoundedMaskCovers(int minHeight);
+
+    // 动画落定后把遮罩精确复位到当前尺寸。已经精确匹配时不做任何事。
+    void settleRoundedMask();
 
     // 右键菜单里的「外观」子菜单。
     // 抽出来是因为 contextMenuEvent 已经很长，而这一段自成一块。
@@ -699,6 +717,14 @@ private:
     // 而是"正在投放的过程中窗口自己缩起来"—— 那会把主人正要放下的
     // 东西弄丢（缩起后列表被隐藏，drop 就没有接收者了）。
     bool m_dragHoverActive  = false;
+
+    // 最近一次下发给原生窗口的圆角遮罩与它的尺寸。
+    //
+    // 存的目的是回答"这张遮罩能不能直接复用"：高度动画期间窗口变矮时，
+    // 旧遮罩（更大）依然完整覆盖窗口，可以原地留着、不必逐帧重设。
+    // 见 ensureRoundedMaskCovers / settleRoundedMask。
+    QBitmap m_maskBitmap;
+    QSize   m_maskSize;
 
     // ---- 动画状态 ----
 

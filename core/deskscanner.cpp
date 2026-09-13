@@ -3,6 +3,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileInfo>
+#include <QSet>
 
 #include <algorithm>
 
@@ -21,13 +22,18 @@ namespace {
 const QString kSelfName = QStringLiteral("DeskTidy");
 
 // 判断某个名字是否被主人列入排除清单（大小写不敏感）。
-bool isNameExcluded(const QString &name, const QStringList &excludedNames)
+//
+// ⚠️ 语义必须与原先逐条 compare(Qt::CaseInsensitive) 完全一致，所以键用的是
+// toCaseFolded() 而不是 toLower() —— Qt 的 CaseInsensitive 比较内部走的就是
+// 大小写折叠，两者对同一对字符串给出相同的相等结论（toLower 在个别字符上
+// 与折叠并不等价，用它换掉会悄悄改变判定）。
+//
+// 改动的理由只是复杂度：原先对每个文件名都把整份排除清单线性扫一遍，
+// 是"文件数 × 排除数"次字符串比较。折叠一次、装进 QSet 之后，
+// 每个名字只剩一次折叠 + 一次哈希查找。
+bool isNameExcluded(const QString &name, const QSet<QString> &excludedFolded)
 {
-    for (const QString &excluded : excludedNames) {
-        if (name.compare(excluded, Qt::CaseInsensitive) == 0)
-            return true;
-    }
-    return false;
+    return excludedFolded.contains(name.toCaseFolded());
 }
 
 // 判断某个名字是否属于"本工具自身"，需要无条件排除。
@@ -52,7 +58,7 @@ bool isDesktopSystemFile(const QString &name)
 
 // 扫描单个桌面目录，把合格条目追加进 out。
 void scanOne(const QString &dirPath, EntryOrigin origin,
-             const QStringList &excludedNames, const QString &boxRootPath,
+             const QSet<QString> &excludedFolded, const QString &boxRootPath,
              QList<DesktopEntry> *out)
 {
     // 空路径必须先挡掉：QDir("") 会解析成"当前工作目录"，
@@ -81,7 +87,7 @@ void scanOne(const QString &dirPath, EntryOrigin origin,
         if (isDesktopSystemFile(name))
             continue;
 
-        if (isNameExcluded(name, excludedNames))
+        if (isNameExcluded(name, excludedFolded))
             continue;
 
         // 自我收纳防护：万一 DeskTidy 根目录被主人放到了桌面上，
@@ -110,10 +116,17 @@ QList<DesktopEntry> scan(const QString &userDesktop,
 {
     QList<DesktopEntry> result;
 
+    // 排除清单折叠一次，两个桌面目录共用 —— 原先每个文件名都要重扫一遍清单。
+    QSet<QString> excludedFolded;
+    excludedFolded.reserve(excludedNames.size());
+    for (const QString &excluded : excludedNames) {
+        excludedFolded.insert(excluded.toCaseFolded());
+    }
+
     scanOne(userDesktop, EntryOrigin::UserDesktop,
-            excludedNames, boxRootPath, &result);
+            excludedFolded, boxRootPath, &result);
     scanOne(publicDesktop, EntryOrigin::PublicDesktop,
-            excludedNames, boxRootPath, &result);
+            excludedFolded, boxRootPath, &result);
 
     // UI 里是一张平铺列表，不排序会让主人每次看到的顺序都不一样。
     std::sort(result.begin(), result.end(),
