@@ -77,6 +77,10 @@ add_executable(DeskTidy WIN32
     ${DESKTIDY_UI_HEADERS}
 )
 
-target_include_directories(DeskTidy PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(DeskTidy PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_CURRENT_SOURCE_DIR}/core
+    ${CMAKE_CURRENT_SOURCE_DIR}/ui
+)
 
 target_link_libraries(DeskTidy PRIVATE Qt6::Core Qt6::Gui Qt6::Widgets)
