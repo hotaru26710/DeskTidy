@@ -1,0 +1,59 @@
+# 构建产物
+build/
+build-*/
+*.o
+*.obj
+*.exe
+*.dll
+*.a
+*.so
+*.dylib
+
+# Qt Creator / qmake 生成物
+Makefile
+Makefile.*
+*.pro.user
+*.pro.user.*
+.qmake.stash
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+*.Debug
+*.Release
+debug/
+release/
+.qtcreator/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+build.ninja
+.ninja_deps
+.ninja_log
+compile_commands.json
+
+# 单测产物
+tests/build/
+tests/*.o
+tests/*.exe
+tests/*.moc
+
+# 测试与实验临时目录（探针建在项目内，避免污染系统临时区）
+_e2e_tmp/
+_testtmp/
+_qtemp/
+_appdata*/
+_drag_probe*/
+_drag_target/
+_wtest/
+*_result.txt
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+*.swp
+*~
+Thumbs.db
+desktop.ini
