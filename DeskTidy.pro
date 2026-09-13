@@ -11,6 +11,7 @@ SOURCES += \
     core/corenames.cpp \
     core/windowlayout.cpp \
     core/settings.cpp \
+    core/autostart.cpp \
     core/deskscanner.cpp \
     core/boxmanager.cpp \
     core/collector.cpp \
@@ -32,6 +33,7 @@ HEADERS += \
     core/corenames.h \
     core/windowlayout.h \
     core/settings.h \
+    core/autostart.h \
     core/deskscanner.h \
     core/boxmanager.h \
     core/collector.h \

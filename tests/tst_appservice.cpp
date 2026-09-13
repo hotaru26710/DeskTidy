@@ -274,6 +274,20 @@ private slots:
         QVERIFY(!s.trayHintShown());
     }
 
+    void settingsAutoStartSilentRoundTrip()
+    {
+        Settings s;
+
+        // 默认应是普通自启，避免旧配置没有该键时界面误显示成静默。
+        QVERIFY(!s.autoStartSilent());
+
+        s.setAutoStartSilent(true);
+        QVERIFY(s.autoStartSilent());
+
+        s.setAutoStartSilent(false);
+        QVERIFY(!s.autoStartSilent());
+    }
+
     // =======================================================================
     // 删除收纳盒
     //

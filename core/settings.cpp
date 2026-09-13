@@ -28,6 +28,9 @@ const QString kKeyAnimations  = QStringLiteral("ui/animations");
 // 悬停自动展开总开关。同样是全局单键、同样"默认值也落键"，理由见上。
 const QString kKeyHoverExpand = QStringLiteral("ui/hoverExpand");
 
+// 开机自启方式偏好。真正的启动项在注册表里，这里只记住用户选过"静默"还是"普通"。
+const QString kKeyAutoStartSilent = QStringLiteral("autostart/silent");
+
 // 含盒名的那几个键用 %1 占位，盒名经编码后填入（见 encodeBoxName）。
 const QString kKeyFloatGeomFmt =
     QStringLiteral("floating/geometry/%1");
@@ -467,5 +470,29 @@ void Settings::setHoverExpandEnabled(bool on)
     // 不用"false 就 remove"那套。否则日后主人报"我这浮窗怎么不自动展开"，
     // 翻配置分不清是他关过还是从没设过。
     ini.setValue(kKeyHoverExpand, on);
+    ini.sync();
+}
+
+// ---------------------------------------------------------------------------
+// 开机自启方式偏好
+// ---------------------------------------------------------------------------
+bool Settings::autoStartSilent() const
+{
+    if (m_iniPath.isEmpty())
+        return false;   // 默认普通自启
+
+    QSettings ini(m_iniPath, QSettings::IniFormat);
+    return ini.value(kKeyAutoStartSilent, false).toBool();
+}
+
+void Settings::setAutoStartSilent(bool silent)
+{
+    if (m_iniPath.isEmpty())
+        return;
+
+    QSettings ini(m_iniPath, QSettings::IniFormat);
+    // 和动画/悬停开关一样，true、false 都是明确选择，不能让"关过"与
+    // "从没设过"在配置里无法区分。
+    ini.setValue(kKeyAutoStartSilent, silent);
     ini.sync();
 }

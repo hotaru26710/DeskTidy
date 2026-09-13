@@ -9,6 +9,7 @@
 #include "appearancedialog.h"
 
 #include "appservice.h"
+#include "autostart.h"
 #include "boxmanager.h"
 #include "corenames.h"
 #include "deskscanner.h"
@@ -16,6 +17,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QCloseEvent>
+#include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFileInfo>
@@ -554,8 +556,8 @@ void MainWindow::onOpenSettings()
     dlg.setWindowTitle(tr("设置"));
     // 比原来的 360 高一点：新加了"启用界面动画"这一行，不留余量会把
     // 排除清单的编辑框挤得只剩两行可见。
-    // 后来又加了"悬停自动展开"一行，再放 20px 余量。
-    dlg.resize(460, 420);
+    // 后来又加了"悬停自动展开"和"开机自动启动"两行，再留出余量。
+    dlg.resize(460, 480);
 
     auto *layout = new QVBoxLayout(&dlg);
 
@@ -577,6 +579,50 @@ void MainWindow::onOpenSettings()
     hover->setToolTip(tr("鼠标停在浮窗上约 0.25 秒后自动展开，移开后约 0.4 秒自动卷起。\n"
                          "手动卷起过的浮窗不会被自动展开（再手动展开一次即可恢复）。"));
     layout->addWidget(hover);
+
+    // ---- 开机自动启动 ----
+    // 与上面两项一样是全局偏好；实际读写放在 core/AutoStart 中，
+    // 主窗口只负责把勾选状态和启动方式交给它，保持"ui 只调 core"的分层。
+    const bool autoStartOn = AutoStart::isEnabled();
+    const bool autoStartSupported = AutoStart::isSupported();
+
+    auto *autostart = new QCheckBox(tr("开机自动启动 DeskTidy"), &dlg);
+    autostart->setChecked(autoStartOn);
+    autostart->setEnabled(autoStartSupported);
+    autostart->setToolTip(autoStartSupported
+                              ? tr("登录 Windows 后自动启动 DeskTidy。\n"
+                                   "该选项只对当前用户生效，可随时在此关闭。")
+                              : tr("当前平台暂不支持在 DeskTidy 中管理开机自启。"));
+    layout->addWidget(autostart);
+
+    // 启动方式单独一行，缩进在复选框下面。控制中心是否出现是启动行为，
+    // 与"要不要开机启动"是两个选择，不能混成一个勾选框。
+    auto *autoStartModeRow = new QHBoxLayout;
+    autoStartModeRow->addSpacing(24);
+    autoStartModeRow->addWidget(new QLabel(tr("自启方式："), &dlg));
+
+    auto *autoStartMode = new QComboBox(&dlg);
+    autoStartMode->addItem(tr("普通自启（显示控制中心）"));
+    autoStartMode->addItem(tr("静默自启（仅显示浮窗）"));
+    autoStartMode->setToolTip(tr("普通自启会照常打开控制中心；静默自启不显示控制中心，"
+                                 "只恢复到上次退出时开着的浮窗并驻留托盘。"));
+    autoStartModeRow->addWidget(autoStartMode, 1);
+    layout->addLayout(autoStartModeRow);
+
+    // 自启关闭时，启动方式没有意义，置灰避免误解；但上次的选择保留在
+    // 配置文件里，重新勾选后仍可沿用，不必每次重选。
+    autoStartMode->setEnabled(autoStartSupported && autostart->isChecked());
+    connect(autostart, &QCheckBox::toggled,
+            autoStartMode, [autoStartSupported, autoStartMode](bool on) {
+                autoStartMode->setEnabled(autoStartSupported && on);
+            });
+
+    // 已开启自启时以注册表里的实际命令为准（例如主人手工改过参数）；
+    // 尚未开启时沿用上次保存的偏好。
+    const bool silentAutoStart = autoStartOn
+        ? AutoStart::isSilent()
+        : m_service->settings()->autoStartSilent();
+    autoStartMode->setCurrentIndex(silentAutoStart ? 1 : 0);
 
     layout->addSpacing(8);
 
@@ -619,6 +665,20 @@ void MainWindow::onOpenSettings()
     // 悬停自动展开同理，而且它与浮窗右键菜单共享同一个配置键，
     // 两处改完都必须经过 manager 广播，否则两边勾选状态会不一致。
     m_floating->setHoverExpandEnabled(hover->isChecked());
+
+    // 开机自启项只有在 Windows 上才可勾选。写失败时给出明确提示，
+    // 但不回滚已经保存成功的其他设置（它们是彼此独立的偏好）。
+    const bool autoStartSilent = (autoStartMode->currentIndex() == 1);
+    m_service->settings()->setAutoStartSilent(autoStartSilent);
+
+    bool autoStartSaved = true;
+    if (AutoStart::isSupported()) {
+        autoStartSaved = AutoStart::setEnabled(autostart->isChecked(), autoStartSilent);
+    }
+    if (!autoStartSaved) {
+        QMessageBox::warning(&dlg, tr("开机自启未生效"),
+                             tr("无法更新 Windows 开机启动项，请确认当前用户有权限写入注册表。"));
+    }
 
     updateStatus(tr("设置已保存，共 %1 条排除项。").arg(names.size()));
 }

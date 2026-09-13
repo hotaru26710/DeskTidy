@@ -8,7 +8,8 @@
 //      环境会发虚、字重不均；
 //   3) 关掉"最后一个窗口关闭即退出"，改由托盘菜单独占退出入口 —— 见下文注释；
 //   4) 创建 AppService / FloatingBoxManager / TrayIcon 并按正确的析构顺序装配；
-//   5) 起主窗口、恢复上次开着的浮窗、进入事件循环。
+//   5) 起主窗口、恢复上次开着的浮窗、进入事件循环；若带
+//      --silent-autostart（开机自启的静默模式）则隐藏控制中心，只留下浮窗与托盘。
 //
 // Qt6 已默认启用高 DPI 缩放，故不再设置 Qt5 时代的
 // AA_EnableHighDpiScaling / AA_UseHighDpiPixmaps 属性（那套在 Qt6 已废弃）。
@@ -20,6 +21,7 @@
 #include "ui/trayicon.h"
 
 #include "appservice.h"
+#include "autostart.h"
 
 #include <QApplication>
 #include <QFont>
@@ -69,6 +71,10 @@ int main(int argc, char *argv[])
 
     app.setFont(pickUiFont());
 
+    // 开机自启的静默模式由注册表命令里的固定参数标识。普通手动启动没有这个参数，
+    // 因此行为保持不变：显示控制中心。
+    const bool silentStart = app.arguments().contains(AutoStart::silentStartArgument());
+
     // 让 Windows 把"从浮窗拖出条目"当成移动而非复制。
     // 不注册的话资源管理器只会复制一份，源文件仍留在盒里，与需求不符。
     // 见 ui/preferreddropeffect.h —— 这是实测验证过的方案。
@@ -109,10 +115,19 @@ int main(int argc, char *argv[])
     TrayIcon           tray(&service, &window, &floating);
     window.setTray(&tray);
 
-    window.show();
+    // 静默自启：不显示控制中心，只让托盘和浮窗常驻。
+    //
+    // 托盘不可用时必须退回显示控制中心。否则静默启动会变成"进程在跑但既没有
+    // 主窗口入口、也没有托盘入口"的幽灵进程。这一条与 MainWindow 的关闭行为
+    // 遵守同一个原则：没有托盘就必须保留一个能找回程序的入口。
+    if (!silentStart || !tray.isAvailable()) {
+        window.show();
+    }
 
-    // 主窗口显示之后再恢复浮窗：浮窗的默认落位依赖屏幕几何，
-    // 且先恢复浮窗会让它们在主窗口之前闪一下，观感上是"先冒出一堆小窗再出主界面"。
+    // 恢复上次退出时开着的浮窗。静默自启也走这里，"默认展示浮窗"靠的就是它；
+    // 若上次没有开浮窗，静默启动就只驻留托盘，不把控制中心弹出来打扰主人。
+    //
+    // 普通启动仍是"主窗口先显示，再恢复浮窗"，避免浮窗抢在主界面之前闪出来。
     floating.restoreOpenBoxes();
 
     // 退出编排。

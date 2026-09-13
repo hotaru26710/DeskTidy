@@ -22,6 +22,9 @@
 // 因此盒子一律靠扫描目录重建（见 BoxManager::listBoxes）。
 // 浮窗那几项存的是"状态"（哪个盒开着浮窗、窗口多大）而不是"有哪些盒"，不冲突。
 //
+// 开机自启同样**不**进这份 INI：它是 Windows 注册表里的系统状态，由
+// core/autostart.h 直接读写。再存一份 bool 会和任务管理器里的启用/禁用状态打架。
+//
 // 落盘位置（Windows 实测）：
 //   %LOCALAPPDATA%\DeskTidy\DeskTidy\DeskTidy.ini
 //   即 C:\Users\<用户>\AppData\Local\DeskTidy\DeskTidy\DeskTidy.ini
@@ -155,6 +158,16 @@ public:
     // 见那里的说明，钉住同时还会关掉让位。
     bool hoverExpandEnabled() const;
     void setHoverExpandEnabled(bool on);
+
+    // ---- 开机自启方式 ----
+
+    // 开机自启是否采用静默方式。
+    //
+    // 这项只决定"下次开启自启时注册表里的命令带不带 --silent-autostart"；
+    // 自启本身是否开启仍以 core/autostart.h 读写的注册表为准。
+    // 关闭自启后也保留这项偏好，方便下次重新勾选时沿用上次选择。
+    bool autoStartSilent() const;
+    void setAutoStartSilent(bool silent);
 
 private:
     // QSettings 不可拷贝，且每次读写都重新构造开销很低，故按需即时创建。
