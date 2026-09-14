@@ -24,6 +24,7 @@ SOURCES += \
     ui/previewdialog.cpp \
     ui/preferreddropeffect.cpp \
     ui/floatingboxwidget.cpp \
+    ui/floatinghoveroverlay.cpp \
     ui/floatingboxmanager.cpp \
     ui/trayicon.cpp \
     ui/appearancedialog.cpp
@@ -46,6 +47,7 @@ HEADERS += \
     ui/previewdialog.h \
     ui/preferreddropeffect.h \
     ui/floatingboxwidget.h \
+    ui/floatinghoveroverlay.h \
     ui/floatingboxmanager.h \
     ui/trayicon.h \
     ui/appearancedialog.h

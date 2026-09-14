@@ -1,5 +1,6 @@
 #include "floatingboxwidget.h"
 
+#include "floatinghoveroverlay.h"
 #include "itemlistwidget.h"
 #include "previewdialog.h"
 
@@ -124,6 +125,34 @@ constexpr int kRollDurationMs = 220;
 // 太快（<120ms）会被看成一帧跳变，反而失去了"平滑让开"的意义 ——
 // 而这一步的全部目的就是让主人看出它是"被让开"而不是"瞬移"。
 constexpr int kLayoutSlideDurationMs = 200;
+
+// 速度档 -> 各自动画时长。淡入淡出（kFadeDurationMs）刻意不在其中：
+// 规格要求它固定 180ms，不随新的动画速度档变化。
+int rollDurationMsFor(BoxAppearance::AnimationSpeed speed)
+{
+    switch (speed) {
+    case BoxAppearance::AnimationSpeed::Relaxed:
+        return 300;
+    case BoxAppearance::AnimationSpeed::Fast:
+        return 150;
+    case BoxAppearance::AnimationSpeed::Standard:
+        break;
+    }
+    return kRollDurationMs;
+}
+
+int layoutSlideDurationMsFor(BoxAppearance::AnimationSpeed speed)
+{
+    switch (speed) {
+    case BoxAppearance::AnimationSpeed::Relaxed:
+        return 270;
+    case BoxAppearance::AnimationSpeed::Fast:
+        return 140;
+    case BoxAppearance::AnimationSpeed::Standard:
+        break;
+    }
+    return kLayoutSlideDurationMs;
+}
 
 // 双击标题栏卷起时的可见高度：就是标题栏本身的高度。
 // 留 0 不额外加边距 —— 卷起后应当正好是一条。
@@ -297,6 +326,10 @@ void FloatingBoxTitleBar::mousePressEvent(QMouseEvent *event)
     m_dragOffset = event->globalPosition().toPoint() - topLevel->frameGeometry().topLeft();
     m_dragging   = true;
     event->accept();
+
+    // 拖动一开始就让浮窗退出悬停光影：拖动期间鼠标很容易甩出窗口边界，
+    // 靠 enter/leave 记账会留下一圈卡住的光晕。
+    emit dragStarted();
 }
 
 void FloatingBoxTitleBar::mouseMoveEvent(QMouseEvent *event)
@@ -312,8 +345,15 @@ void FloatingBoxTitleBar::mouseMoveEvent(QMouseEvent *event)
 
 void FloatingBoxTitleBar::mouseReleaseEvent(QMouseEvent *event)
 {
+    const bool wasDragging = m_dragging;
     m_dragging = false;
     QWidget::mouseReleaseEvent(event);
+
+    // 只在"确实拖过"时通知一次。随手在自己身上点一下也会走 Press/Release，
+    // 那种情况没有进入过拖动，不该触发恢复逻辑。
+    if (wasDragging) {
+        emit dragFinished();
+    }
 }
 
 void FloatingBoxTitleBar::mouseDoubleClickEvent(QMouseEvent *event)
@@ -412,6 +452,10 @@ FloatingBoxWidget::FloatingBoxWidget(AppService *service,
     // 这个属性名是 Qt 定的字符串，写错不会编译报错、只会"动画没反应"，
     // 所以单独注释标一下。
     m_animationsOn = m_service->settings()->animationsEnabled();
+
+    // buildUi 里创建覆盖层时 m_animationsOn 还是初始值 true，这里拿到真实配置后
+    // 必须补同步一次，否则"全局关掉界面动画"的启动场景下，触感首次仍会播过渡。
+    syncHoverOverlay();
 
     m_opacityAnim = new QPropertyAnimation(this, "windowOpacity", this);
     m_opacityAnim->setDuration(kFadeDurationMs);
@@ -579,6 +623,13 @@ void FloatingBoxWidget::buildUi()
     connect(m_titleBar, &FloatingBoxTitleBar::doubleClicked,
             this, &FloatingBoxWidget::onToggleRollUp);
 
+    // 拖动开始 / 结束：开关光晕。拖动期间鼠标被系统抓着，enter/leave
+    // 不再可靠，所以这两个信号是唯一可信的时机。
+    connect(m_titleBar, &FloatingBoxTitleBar::dragStarted,
+            this, &FloatingBoxWidget::refreshHoverGlow);
+    connect(m_titleBar, &FloatingBoxTitleBar::dragFinished,
+            this, &FloatingBoxWidget::refreshHoverGlow);
+
     // 锁图标 -> 请求写配置并广播。
     //
     // 浮窗不自己写配置：钉住还会影响"谁推谁"，那需要 manager 重新组装
@@ -710,6 +761,8 @@ void FloatingBoxWidget::buildUi()
         // 一个待触发的收起计时若留到拖拽结束后才炸，会在主人松手之后
         // 突然把窗口卷起来，看起来像"拖完文件窗口自己关了"。
         stopHoverTimers();
+        // 光影同步退掉：拖出是系统级鼠标抓取，期间 enter/leave 不可信。
+        refreshHoverGlow();
     });
     connect(m_itemList, &ItemListWidget::filesDropped,
             this, &FloatingBoxWidget::onFilesDropped);
@@ -753,6 +806,11 @@ void FloatingBoxWidget::buildUi()
     // 延迟值取自头文件里的 static constexpr 常量，而不是在这里写死数字：
     // 单元测试要引用它们来断言"延迟确实是 250/400"，
     // 两处各写一遍必然漂移（改了实现忘了改测试，测试仍然全绿 —— 比没有测试更糟）。
+    // ⚠️ 这里给的只是**初始值**（= 默认外观的延迟）。真正生效的延迟是
+    // 每盒一份的 BoxAppearance::hoverExpandDelayMs，在 applyAppearance 里
+    // 随外观一起下发。放在这里先设一遍是为了"外观还没来之前"也有个合法值，
+    // 否则定时器默认间隔是 0，构造与首次 applyAppearance 之间若有 enter，
+    // 会立刻展开一下。
     m_hoverExpandTimer = new QTimer(this);
     m_hoverExpandTimer->setSingleShot(true);
     m_hoverExpandTimer->setInterval(kHoverExpandDelayMs);
@@ -782,6 +840,20 @@ void FloatingBoxWidget::buildUi()
     // MouseButtonRelease 上取状态。用过滤器而不是继承一个子类：
     // 这个状态只在本文件内用一次，为它多开一个类不划算。
     m_sizeGrip->installEventFilter(this);
+
+    // ---- 悬停光影覆盖层 ----
+    //
+    // ⚠️ 必须在所有子控件都建好之后创建并 raise()：它要铺满整个客户区、
+    // 画在标题栏与列表之上才看得见。
+    //
+    // 它**不进入任何布局**：布局会把它当成一行，只能占某个条带的高度，
+    // 而光影描边要贴着窗口四边。位置由 layoutHoverOverlay() 手动给。
+    //
+    // 鼠标穿透（见 FloatingHoverOverlay 构造函数）保证它不会吃掉列表的
+    // 点击 / 悬停 / 拖拽，也不抢焦点。
+    m_hoverOverlay = new FloatingHoverOverlay(this);
+    layoutHoverOverlay();
+    syncHoverOverlay();
 }
 
 bool FloatingBoxWidget::eventFilter(QObject *watched, QEvent *event)
@@ -792,9 +864,14 @@ bool FloatingBoxWidget::eventFilter(QObject *watched, QEvent *event)
             // 按下手柄 = 正在拉尺寸。这期间窗口边界一直在动，
             // 悬停判定必然不准，直接整体屏蔽。
             m_sizeGripActive = true;
+            // 拉尺寸期间鼠标也会跑到窗口外，先把光晕退掉，
+            // 免得它卡在半亮的状态。
+            refreshHoverGlow();
             break;
         case QEvent::MouseButtonRelease:
             m_sizeGripActive = false;
+            // 松手后按鼠标此刻的位置决定要不要恢复光晕。
+            refreshHoverGlow();
             break;
         default:
             break;
@@ -851,6 +928,7 @@ void FloatingBoxWidget::onCollectDesktop()
         // 「收纳桌面」，浮窗自己先卷起来，确认框还盖在一条细线上。
         // 守卫是 RAII 的，弹窗中途 return 也不会漏复位。
         ModalGuard guard(&m_modalDialogOpen);
+        refreshHoverGlow();
         QMessageBox::information(this, tr("桌面已经很干净了"),
                                  tr("没有找到需要收纳的条目。"));
         return;
@@ -867,10 +945,13 @@ void FloatingBoxWidget::onCollectDesktop()
     {
         // 模态期间挡掉悬停判定 —— 理由同 onCollectDesktop 里那个空列表分支。
         ModalGuard guard(&m_modalDialogOpen);
+        // 模态期间光影也退掉：对话框弹出来时鼠标已经不在浮窗上了。
+        refreshHoverGlow();
         if (dlg.exec() != QDialog::Accepted) {
             return;
         }
     }
+    refreshHoverGlow();
 
     collectEntries(dlg.selectedEntries());
 }
@@ -951,10 +1032,12 @@ void FloatingBoxWidget::onUndoClicked()
     QMessageBox::StandardButton answer = QMessageBox::No;
     {
         ModalGuard guard(&m_modalDialogOpen);
+        refreshHoverGlow();
         answer = QMessageBox::question(this, tr("撤销收纳"), question,
                                        QMessageBox::Yes | QMessageBox::No,
                                        QMessageBox::No);
     }
+    refreshHoverGlow();
     if (answer != QMessageBox::Yes) {
         return;
     }
@@ -979,9 +1062,13 @@ void FloatingBoxWidget::onOpenRequested(const QString &path)
 
     // 只在真的失败、要弹警告框时才挡悬停 —— openPath 本身是普通调用，
     // 不弹窗时没什么需要屏蔽的。
-    ModalGuard guard(&m_modalDialogOpen);
-    QMessageBox::warning(this, tr("打开失败"),
-                         err.isEmpty() ? tr("无法用系统默认方式打开该项目。") : err);
+    {
+        ModalGuard guard(&m_modalDialogOpen);
+        refreshHoverGlow();
+        QMessageBox::warning(this, tr("打开失败"),
+                             err.isEmpty() ? tr("无法用系统默认方式打开该项目。") : err);
+    }
+    refreshHoverGlow();
 }
 
 // ---------------------------------------------------------------------------
@@ -995,6 +1082,9 @@ void FloatingBoxWidget::onDragOutFinished(const QString &path, bool sourceStillE
     // 提前 return（刷新后返回、弹框后返回），写在后面必然有路径漏掉，
     // 而漏掉的后果是这个浮窗从此永不自动展开/收起，还查不出原因。
     m_dragOutActive = false;
+
+    // 拖完解除光影屏蔽，按鼠标此刻的位置决定要不要重新亮起。
+    refreshHoverGlow();
 
     // 拖完之后鼠标多半已经不在窗口上了（人把文件拖到别处去了）。
     // 若这次是悬停展开的，该收就收 —— 但要重新起计时，
@@ -1022,14 +1112,18 @@ void FloatingBoxWidget::onDragOutFinished(const QString &path, bool sourceStillE
 
     // 源仍在盒里：对方没接手，或者只是复制了一份。
     // 必须明确告知，绝不能让主人以为文件已经还原了。
-    ModalGuard guard(&m_modalDialogOpen);
-    QMessageBox::information(
-        this, tr("未完成移动"),
-        tr("文件仍保留在收纳盒中，没有移动任何东西。\n\n"
-           "原因：目标位置不接受文件拖放（例如拖到了某个程序窗口或浏览器的空白处）。\n\n"
-           "如需把「%1」移出去，请改用右键菜单里的「还原到桌面」，"
-           "或者把它拖到资源管理器的文件夹里。")
-            .arg(QFileInfo(path).fileName()));
+    {
+        ModalGuard guard(&m_modalDialogOpen);
+        refreshHoverGlow();
+        QMessageBox::information(
+            this, tr("未完成移动"),
+            tr("文件仍保留在收纳盒中，没有移动任何东西。\n\n"
+               "原因：目标位置不接受文件拖放（例如拖到了某个程序窗口或浏览器的空白处）。\n\n"
+               "如需把「%1」移出去，请改用右键菜单里的「还原到桌面」，"
+               "或者把它拖到资源管理器的文件夹里。")
+                .arg(QFileInfo(path).fileName()));
+    }
+    refreshHoverGlow();
 }
 
 // ---------------------------------------------------------------------------
@@ -1492,6 +1586,14 @@ void FloatingBoxWidget::enterEvent(QEnterEvent *event)
 {
     QWidget::enterEvent(event);
 
+    // ---- 光影触感：优先于"自动展开"的一切开关 ----
+    //
+    // ⚠️ 必须放在 canAutoExpand() 那些早退**之前**。
+    // 「鼠标悬停自动展开」是全局开关，而触感是独立的视觉反馈 ——
+    // 自动展开关掉后光影仍然要亮。若把这一句放到早退之后，
+    // 关掉自动展开的浮窗就彻底没有触感了。
+    refreshHoverGlow();
+
     // ⚠️⚠️ 进窗口的第一件事：**停掉离开定时器**。
     //
     // 这是整个悬停交互里最容易出的一个 bug，而且是经典形态：
@@ -1520,6 +1622,9 @@ void FloatingBoxWidget::enterEvent(QEnterEvent *event)
 void FloatingBoxWidget::leaveEvent(QEvent *event)
 {
     QWidget::leaveEvent(event);
+
+    // 光影触感：同样放在所有早退之前。离开就让它平滑消退。
+    refreshHoverGlow();
 
     // 刚离开时那个展开计时就不该继续了 —— 鼠标已经走了，
     // 到点后把窗口展开是很莫名其妙的（人都不在那儿了）。
@@ -1583,11 +1688,174 @@ void FloatingBoxWidget::onHoverCollapseTimeout()
 }
 
 // ---------------------------------------------------------------------------
+// 悬停光影触感
+//
+// 这一层严格约束在 FloatingHoverOverlay 内部：不改窗口尺寸 / 位置 / 透明度，
+// 不碰窗口遮罩。这样它就不可能干扰浮窗之间的推动与让位逻辑 ——
+// 那套逻辑的种种 bug 都源于窗口几何在动画中途被别的机制改写。
+// ---------------------------------------------------------------------------
+
+bool FloatingBoxWidget::hoverGlowBlocked() const
+{
+    // 拉右下角尺寸手柄：窗口边界一直在动，鼠标也容易出界。
+    if (m_sizeGripActive) {
+        return true;
+    }
+
+    // 右键菜单 exec()：模态事件循环期间 Qt 会立刻发 leaveEvent。
+    if (m_contextMenuOpen) {
+        return true;
+    }
+
+    // 模态对话框 exec()：与菜单同理。
+    if (m_modalDialogOpen) {
+        return true;
+    }
+
+    // 拖出条目：QDrag::exec() 是系统级鼠标抓取，期间收不到正常的 enter/leave。
+    if (m_dragOutActive) {
+        return true;
+    }
+
+    // 拖动窗口：多查一次物理按键，防止丢了 Release 之后 isDragging() 永久卡真，
+    // 那样这个浮窗的光晕就再也亮不起来了。
+    if (m_titleBar && m_titleBar->isDragging()
+        && (QGuiApplication::mouseButtons() & Qt::LeftButton)) {
+        return true;
+    }
+
+    return false;
+}
+
+void FloatingBoxWidget::refreshHoverGlow()
+{
+    if (!m_hoverOverlay) {
+        return;
+    }
+
+    // 窗口还没显示 / 已经被隐藏：没有什么可画的。
+    if (!isVisible()) {
+        m_hoverOverlay->setActive(false);
+        return;
+    }
+
+    // 交互中：立刻退出光晕（覆盖层自己会播消退动画）。
+    if (hoverGlowBlocked()) {
+        m_hoverOverlay->setActive(false);
+        return;
+    }
+
+    // ⚠️ 用几何包含关系而不是 underMouse()：与 shouldAutoCollapse 同源 ——
+    // underMouse() 依赖 Qt 内部的 enter/leave 记账，而这里恰恰是在怀疑
+    // 那套记账（拖动、菜单、尺寸调整期间它本来就不可靠）。
+    const bool inside = rect().contains(mapFromGlobal(QCursor::pos()));
+    m_hoverOverlay->setActive(inside);
+}
+
+void FloatingBoxWidget::syncHoverOverlay()
+{
+    if (!m_hoverOverlay) {
+        return;
+    }
+
+    m_hoverOverlay->setHoverEffect(m_appearance.hoverEffect);
+    m_hoverOverlay->setStrength(m_appearance.feedbackStrength);
+    m_hoverOverlay->setAnimationSpeed(m_appearance.animationSpeed);
+    m_hoverOverlay->setAnimationsEnabled(m_animationsOn);
+    m_hoverOverlay->setCornerRadius(m_appearance.cornerRadius);
+
+    // 外观可能是在鼠标已经停在窗口上时改的（比如从设置对话框改完按确定）。
+    // 立刻按当前状态刷新一次，主人马上就能看到新强度，不必再进出一次。
+    refreshHoverGlow();
+}
+
+void FloatingBoxWidget::layoutHoverOverlay()
+{
+    if (!m_hoverOverlay) {
+        return;
+    }
+
+    // ⚠️ setGeometry 改的是**子控件**的几何，不是顶层窗口的，所以既不会
+    // 触发浮窗自身的 resizeEvent / 遮罩重算，也不会影响让位逻辑。
+    m_hoverOverlay->setGeometry(rect());
+
+    // 必须在最上层：它要盖过标题栏、列表、操作条才画得出一整圈描边。
+    m_hoverOverlay->raise();
+}
+
+void FloatingBoxWidget::applyCornerRadiusToUi()
+{
+    const int radius = m_appearance.cornerRadius;
+
+    // ---- 标题栏：顶部两个圆角 ----
+    // 底部与操作条接壤，不能圆 —— 圆了会在接缝处露出窗口底色。
+    if (m_titleBar) {
+        m_titleBar->setStyleSheet(QStringLiteral(
+            "FloatingBoxTitleBar {"
+            "  background: #F1F3F4;"
+            "  border-bottom: 1px solid #DADCE0;"
+            "  border-top-left-radius: %1px;"
+            "  border-top-right-radius: %1px;"
+            "}").arg(radius));
+    }
+
+    // ---- 手柄行：底部两个圆角 ----
+    if (m_gripRow) {
+        m_gripRow->setStyleSheet(QStringLiteral(
+            "QWidget#gripRow {"
+            "  background: #FFFFFF;"
+            "  border-bottom-left-radius: %1px;"
+            "  border-bottom-right-radius: %1px;"
+            "}").arg(radius));
+    }
+
+    if (m_hoverOverlay) {
+        m_hoverOverlay->setCornerRadius(radius);
+    }
+
+    m_appliedCornerRadius = radius;
+
+    // ⚠️ 必须让遮罩缓存失效再重建。
+    //
+    // settleRoundedMask / ensureRoundedMaskCovers 的复用分支只看
+    // m_maskSize == size()：圆角改了但尺寸没变时它们会判定"可复用"，
+    // 于是边框样式按新半径画、窗口却仍按旧半径裁 —— 表现为
+    // "圆角调大了但四角还是原来的样子"，而且看不出是哪一步没生效。
+    m_maskSize = QSize();
+    updateRoundedMask();
+}
+
+// ---------------------------------------------------------------------------
 // 外观
 // ---------------------------------------------------------------------------
 void FloatingBoxWidget::applyAppearance(const BoxAppearance &appearance)
 {
+    const int previousCornerRadius = m_appearance.cornerRadius;
     m_appearance = appearance;
+    const bool radiusChanged = (previousCornerRadius != m_appearance.cornerRadius);
+
+    // ---- 悬停触感 ----
+    // 覆盖层自己不读配置，四项（开关 / 强度 / 速度 / 圆角）由这里一次性下发。
+    syncHoverOverlay();
+
+    // ---- 悬停展开 / 收起延迟 ----
+    // 每盒一份。这里再归一化一道，防有人绕过配置层直接塞越界值 ——
+    // 定时器收到 0 会变成"鼠标扫过桌面就一片窗口炸开"。
+    if (m_hoverExpandTimer) {
+        m_hoverExpandTimer->setInterval(
+            BoxAppearance::normalizeHoverExpandDelayMs(m_appearance.hoverExpandDelayMs));
+    }
+    if (m_hoverCollapseTimer) {
+        m_hoverCollapseTimer->setInterval(
+            BoxAppearance::normalizeHoverCollapseDelayMs(m_appearance.hoverCollapseDelayMs));
+    }
+
+    // ---- 圆角 ----
+    // 圆角是唯一会真正动到窗口遮罩的外观项，单独收在一处：
+    // 只有它变了（或原生窗口刚重建过）才碰 setMask()，悬停期间绝不调用。
+    if (radiusChanged || m_appliedCornerRadius < 0) {
+        applyCornerRadiusToUi();
+    }
 
     // ---- 透明度 ----
     // 用 setWindowOpacity 而不是样式表。三条理由，第二条是决定性的：
@@ -1697,6 +1965,12 @@ void FloatingBoxWidget::setAnimationsEnabled(bool on)
     }
     m_animationsOn = on;
 
+    // 覆盖层也要跟着切换：全局动画关掉时触感"立即出现 / 立即消失"，
+    // 不播放过渡（见 FloatingHoverOverlay::setAnimationsEnabled）。
+    if (m_hoverOverlay) {
+        m_hoverOverlay->setAnimationsEnabled(on);
+    }
+
     // ⚠️ 正在淡出时把动画关掉，必须补发一次 closeRequested。
     //
     // 因为 fadeOutThenClose 是靠动画的 finished 信号去报告关闭的，
@@ -1785,7 +2059,8 @@ void FloatingBoxWidget::animateHeightTo(int targetHeight)
     m_rollAnimating = true;
 
     const QSize startSize = size();
-    m_heightAnim->setDuration(kRollDurationMs);
+    // 时长跟着每盒的动画速度档走（舒缓 300 / 标准 220 / 快速 150）。
+    m_heightAnim->setDuration(rollDurationMsFor(m_appearance.animationSpeed));
     m_heightAnim->setStartValue(startSize);
     m_heightAnim->setEndValue(QSize(startSize.width(), targetHeight));
 
@@ -1849,6 +2124,11 @@ void FloatingBoxWidget::prepareFadeIn(bool skip)
 
 void FloatingBoxWidget::fadeIn(bool skip)
 {
+    // 窗口刚刚 show 出来，鼠标有可能已经停在它上面了（比如上次就悬在那儿，
+    // 或者程序启动时鼠标恰好在这个位置）—— 此时 enterEvent 未必会补发，
+    // 所以主动按当前位置刷新一次触感，免得"鼠标明明在上面，光晕却不亮"。
+    refreshHoverGlow();
+
     const double target = targetOpacityFromAppearance();
 
     // skip：启动恢复一次开出多个浮窗时用。
@@ -2083,9 +2363,18 @@ void FloatingBoxWidget::contextMenuEvent(QContextMenuEvent *event)
     // 用 RAII 而不是"exec 前设真、exec 后设假"两句：QMenu::exec 虽然不抛异常，
     // 但中间那一段有 return 的风险（日后有人加个提前返回就漏了复位），
     // 而漏复位的后果是**这个浮窗从此再也不自动展开/收起**，非常难查。
-    ModalGuard guard(&m_contextMenuOpen);
+    {
+        ModalGuard guard(&m_contextMenuOpen);
 
-    menu.exec(event->globalPos());
+        // 菜单是模态事件循环：弹出后 Qt 会立刻给浮窗发 leaveEvent，
+        // 光晕若跟着 leave 走会闪一下。这里主动先退掉，等菜单关掉再说。
+        refreshHoverGlow();
+
+        menu.exec(event->globalPos());
+    }
+
+    // 菜单关闭、m_contextMenuOpen 已复位，按鼠标此刻的位置决定是否恢复光晕。
+    refreshHoverGlow();
 }
 
 void FloatingBoxWidget::buildAppearanceMenu(QMenu *parentMenu)
@@ -2410,6 +2699,10 @@ void FloatingBoxWidget::animatePosTo(const QPoint &target)
         return;
     }
 
+    // 让位时长跟着本盒的动画速度档走（舒缓 270 / 标准 200 / 快速 140）。
+    // 放在 start() 前设置：这段动画是"被叫去做一件事"，用当前档位才对；
+    // 换档不会去改正在跑的那一段，避免让位中途速度突变。
+    m_posAnim->setDuration(layoutSlideDurationMsFor(m_appearance.animationSpeed));
     m_posAnim->setStartValue(pos());
     m_posAnim->setEndValue(target);
     m_posAnim->start();
@@ -2495,8 +2788,9 @@ void FloatingBoxWidget::applyRoundedMask(int w, int h)
 
     // 内缩半像素：抗锯齿的边界会落在半个像素上，不内缩的话最外一圈
     // 会被削掉一像素，圆角看着比 8px 小一点。
+    const qreal radius = qMax(0, m_appearance.cornerRadius);
     painter.drawRoundedRect(QRectF(0, 0, w, h).adjusted(0.5, 0.5, -0.5, -0.5),
-                            kCornerRadius, kCornerRadius);
+                            radius, radius);
     painter.end();
 
     m_maskBitmap = mask;
@@ -2717,6 +3011,10 @@ void FloatingBoxWidget::resizeEvent(QResizeEvent *event)
         && event->size().height() > rolledUpHeight()) {
         m_expandedHeight = event->size().height();
     }
+
+    // 光影覆盖层跟着客户区一起长 / 缩，并确保仍在最上层
+    //（列表刷新、布局重排都可能把它压下去）。
+    layoutHoverOverlay();
 
     scheduleGeometrySave();
 }

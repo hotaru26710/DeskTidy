@@ -78,15 +78,19 @@ public:
 
     // ---- 浮窗外观（每盒一份）----
     //
-    // 三项（视图模式 / 图标尺寸 / 透明度）打包在 BoxAppearance 里整体读写，
+    // 全部外观项（视图模式 / 图标尺寸 / 透明度 / 悬停触感 / 反馈强度 /
+    // 动画速度 / 展开延迟 / 收起延迟 / 圆角）打包在 BoxAppearance 里整体读写，
     // 不提供逐项访问器：散着传容易漏传一项，表现是"改了没反应"这种难查的问题。
     //
     // 读写都遵循"只存非默认值"的约定（同 floatRolledUp）：
     // 默认外观不落任何键，少一个键就少一份可能失真的状态。
     //
-    // 读取时所有值都会被夹到合法范围（枚举越界退回 List、透明度夹进
-    // [BoxAppearance::kMinOpacity, 100]）—— 配置文件是可以被手工编辑的，
-    // 不能假设它一定合法。
+    // 读取时所有值都会被夹到合法范围（枚举越界退回默认档、透明度夹进
+    // [BoxAppearance::kMinOpacity, 100]、延迟与圆角归一化到最近的安全预设）
+    // —— 配置文件是可以被手工编辑的，不能假设它一定合法。
+    //
+    // 旧版本配置里没有触感相关的六个键，读取时自动补默认值（光影 + 标准 +
+    // 250/400ms + 8px），因此升级后已有浮窗保留原外观并自动获得默认触感。
     BoxAppearance floatAppearance(const QString &boxName) const;
     void          setFloatAppearance(const QString &boxName, const BoxAppearance &appearance);
 

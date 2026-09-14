@@ -44,5 +44,73 @@ bool BoxAppearance::isDefault() const
 {
     return viewMode == ViewMode::List
            && iconSize == 0
-           && opacity == 100;
+           && opacity == 100
+           && hoverEffect == HoverEffect::Glow
+           && feedbackStrength == FeedbackStrength::Standard
+           && animationSpeed == AnimationSpeed::Standard
+           && hoverExpandDelayMs == 250
+           && hoverCollapseDelayMs == 400
+           && cornerRadius == 8;
+}
+
+namespace {
+
+// 通用：把一个整数夹到某个预设数组里数值最接近的那一档。
+// 距离相同（正好落在两档正中间）时取较小的一档 —— 保持确定性。
+int nearestPreset(const int *presets, int count, int raw)
+{
+    int best = presets[0];
+    int bestDist = std::abs(raw - best);
+    for (int i = 1; i < count; ++i) {
+        const int dist = std::abs(raw - presets[i]);
+        if (dist < bestDist) {
+            bestDist = dist;
+            best = presets[i];
+        }
+    }
+    return best;
+}
+
+// 通用：把一个整数夹到 [0, count-1]，用于修复非法枚举值。
+template <typename Enum>
+Enum clampEnum(int raw, int count)
+{
+    if (raw < 0)
+        return static_cast<Enum>(0);
+    if (raw >= count)
+        return static_cast<Enum>(count - 1);
+    return static_cast<Enum>(raw);
+}
+
+} // namespace
+
+BoxAppearance::HoverEffect BoxAppearance::normalizeHoverEffect(int raw)
+{
+    // 只有 Off / Glow 两档，"最近的预设"就是往有效区间里夹。
+    return clampEnum<HoverEffect>(raw, 2);
+}
+
+BoxAppearance::FeedbackStrength BoxAppearance::normalizeFeedbackStrength(int raw)
+{
+    return clampEnum<FeedbackStrength>(raw, 3);
+}
+
+BoxAppearance::AnimationSpeed BoxAppearance::normalizeAnimationSpeed(int raw)
+{
+    return clampEnum<AnimationSpeed>(raw, 3);
+}
+
+int BoxAppearance::normalizeHoverExpandDelayMs(int raw)
+{
+    return nearestPreset(kHoverExpandDelaysMs, 3, raw);
+}
+
+int BoxAppearance::normalizeHoverCollapseDelayMs(int raw)
+{
+    return nearestPreset(kHoverCollapseDelaysMs, 3, raw);
+}
+
+int BoxAppearance::normalizeCornerRadius(int raw)
+{
+    return nearestPreset(kCornerRadii, 4, raw);
 }

@@ -1,11 +1,14 @@
 #include "appearancedialog.h"
 
 #include "floatingboxmanager.h"
+#include "floatinghoveroverlay.h"
 #include "itemlistwidget.h"
 
+#include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QDir>
+#include <QEvent>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -57,6 +60,34 @@ const BoxAppearance::ViewMode kViewModeOrder[] = {
 
 constexpr int kViewModeCount = int(sizeof(kViewModeOrder) / sizeof(kViewModeOrder[0]));
 
+// 反馈强度 / 动画速度下拉框的顺序，与枚举值一一对应（见 buildUi 里逐条写的文案）。
+const BoxAppearance::FeedbackStrength kStrengthOrder[] = {
+    BoxAppearance::FeedbackStrength::Subtle,
+    BoxAppearance::FeedbackStrength::Standard,
+    BoxAppearance::FeedbackStrength::Strong,
+};
+
+const BoxAppearance::AnimationSpeed kSpeedOrder[] = {
+    BoxAppearance::AnimationSpeed::Relaxed,
+    BoxAppearance::AnimationSpeed::Standard,
+    BoxAppearance::AnimationSpeed::Fast,
+};
+
+// 在一张预设表里找值的下标。找不到返回 0。
+//
+// 调用方（syncControlsFromAppearance）传进来的值**总是**预设之一 ——
+// 配置层已经把越界值归一化到最近预设了。所以这里的兜底不会被用到，
+// 它只是防"将来有人绕过配置层直接塞了个怪值"时不至于把下标搞成 -1。
+template <typename T, size_t N>
+int indexOfPreset(const T (&values)[N], T needle)
+{
+    for (size_t i = 0; i < N; ++i) {
+        if (values[i] == needle)
+            return int(i);
+    }
+    return 0;
+}
+
 } // namespace
 
 AppearanceDialog::AppearanceDialog(const QList<StorageBox> &boxes,
@@ -68,7 +99,9 @@ AppearanceDialog::AppearanceDialog(const QList<StorageBox> &boxes,
     , m_boxes(boxes)
 {
     setWindowTitle(tr("浮窗外观"));
-    resize(480, 520);
+    // 高度比最初的 520 高一截：多出来的「触感与动画」分组有六行控件，
+    // 不放大就会把预览区挤到只剩一条缝，等于把"所见即所得"这个卖点废掉。
+    resize(500, 700);
     setModal(true);
 
     // 没有盒可设置时走空状态界面。放在构造里统一判断，
@@ -186,6 +219,59 @@ void AppearanceDialog::buildUi()
     m_hintLabel->setStyleSheet(QStringLiteral("color: #5F6368;"));
     root->addWidget(m_hintLabel);
 
+    // ---- 触感与动画（每盒一份）----
+    //
+    // 六项都挂在盒上，不是全局项 —— 每个浮窗可以有自己的手感。
+    // 每行文案逐条字面量写，与上面的视图模式同理：lupdate 提取不出
+    // tr(variable)，用变量拼出来的词在将来做多语言时会静默漏翻。
+    auto *touchBox  = new QGroupBox(tr("触感与动画"), this);
+    auto *touchForm = new QFormLayout(touchBox);
+    touchForm->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
+
+    m_hoverEffectCheck = new QCheckBox(tr("鼠标一进浮窗就描一圈光影"), touchBox);
+    touchForm->addRow(tr("悬停触感："), m_hoverEffectCheck);
+
+    m_strengthCombo = new QComboBox(touchBox);
+    m_strengthCombo->addItem(tr("轻微"));
+    m_strengthCombo->addItem(tr("标准"));
+    m_strengthCombo->addItem(tr("明显"));
+    touchForm->addRow(tr("反馈强度："), m_strengthCombo);
+
+    m_speedCombo = new QComboBox(touchBox);
+    m_speedCombo->addItem(tr("舒缓"));
+    m_speedCombo->addItem(tr("标准"));
+    m_speedCombo->addItem(tr("快速"));
+    touchForm->addRow(tr("动画速度："), m_speedCombo);
+
+    // 延迟与圆角的下拉项直接从安全预设表生成。
+    // 不在这里另抄一份数字：抄一份就有机会与 coretypes.h 里的表漂移，
+    // 而症状是"界面能选到的档位，配置层读回来给归一化成了另一档"。
+    m_expandDelayCombo = new QComboBox(touchBox);
+    for (const int ms : BoxAppearance::kHoverExpandDelaysMs)
+        m_expandDelayCombo->addItem(tr("%1 ms").arg(ms));
+    touchForm->addRow(tr("展开延迟："), m_expandDelayCombo);
+
+    m_collapseDelayCombo = new QComboBox(touchBox);
+    for (const int ms : BoxAppearance::kHoverCollapseDelaysMs)
+        m_collapseDelayCombo->addItem(tr("%1 ms").arg(ms));
+    touchForm->addRow(tr("收起延迟："), m_collapseDelayCombo);
+
+    m_cornerCombo = new QComboBox(touchBox);
+    for (const int px : BoxAppearance::kCornerRadii)
+        m_cornerCombo->addItem(tr("%1 px").arg(px));
+    touchForm->addRow(tr("圆角大小："), m_cornerCombo);
+
+    root->addWidget(touchBox);
+
+    m_touchHintLabel = new QLabel(
+        tr("光影触感与「鼠标悬停自动展开」相互独立：关掉自动展开后它照样生效。"
+           "全局「启用界面动画」是总开关，关掉时触感会立即出现、立即消失，"
+           "不播放过渡。"),
+        this);
+    m_touchHintLabel->setWordWrap(true);
+    m_touchHintLabel->setStyleSheet(QStringLiteral("color: #5F6368;"));
+    root->addWidget(m_touchHintLabel);
+
     // ---- 预览区 ----
     auto *previewBox    = new QGroupBox(tr("预览"), this);
     auto *previewLayout = new QVBoxLayout(previewBox);
@@ -197,13 +283,31 @@ void AppearanceDialog::buildUi()
     opts.doubleClick  = ItemListWidget::DoubleClickAction::Open;
     opts.draggableOut = false;
 
-    m_preview = new ItemListWidget(opts, previewBox);
+    m_previewHost = new QWidget(previewBox);
+    auto *hostLayout = new QVBoxLayout(m_previewHost);
+    hostLayout->setContentsMargins(0, 0, 0, 0);
+
+    m_preview = new ItemListWidget(opts, m_previewHost);
     // 关键：预览区不接受任何鼠标交互。
     // 它内嵌的是真控件，不屏蔽的话主人能在里面选中、双击、甚至试着拖出条目，
     // 而那些信号本对话框一个都没接 —— 表现就是"点了没反应"，像是坏了。
     m_preview->setAttribute(Qt::WA_TransparentForMouseEvents, true);
     m_preview->setFocusPolicy(Qt::NoFocus);
-    previewLayout->addWidget(m_preview, 1);
+    hostLayout->addWidget(m_preview);
+    previewLayout->addWidget(m_previewHost, 1);
+
+    // 预览区自己也能"被碰到"：与桌面浮窗共用同一个 FloatingHoverOverlay，
+    // 所以对话框里调出来的手感与外面看到的**不可能**不一致 ——
+    // 若这里另画一套示意图，两套实现迟早分叉，而主人正是照预览做决定的。
+    m_previewGlow = new FloatingHoverOverlay(m_preview);
+    m_previewGlow->setGeometry(m_preview->rect());
+    m_previewGlow->raise();
+
+    // 覆盖层不参与布局，尺寸得跟着预览控件走。
+    m_preview->installEventFilter(this);
+    // ⚠️ Enter/Leave 监听的是**容器**：预览控件是鼠标穿透的，
+    // 指针进出时事件落到它下面的容器上，挂在预览上收不到。
+    m_previewHost->installEventFilter(this);
 
     root->addWidget(previewBox, 1);
 
@@ -225,6 +329,21 @@ void AppearanceDialog::buildUi()
             this, &AppearanceDialog::onViewModeChanged);
     connect(m_opacitySlider, &QSlider::valueChanged,
             this, &AppearanceDialog::onOpacityChanged);
+
+    // 六项触感控件走同一个槽：它们对界面做的事完全一样
+    //（读回数据 -> 刷新预览 -> 重算按钮可用性），分成六个槽只会多五份复制粘贴。
+    connect(m_hoverEffectCheck, &QCheckBox::toggled,
+            this, &AppearanceDialog::onTactileChanged);
+    connect(m_strengthCombo, &QComboBox::currentIndexChanged,
+            this, &AppearanceDialog::onTactileChanged);
+    connect(m_speedCombo, &QComboBox::currentIndexChanged,
+            this, &AppearanceDialog::onTactileChanged);
+    connect(m_expandDelayCombo, &QComboBox::currentIndexChanged,
+            this, &AppearanceDialog::onTactileChanged);
+    connect(m_collapseDelayCombo, &QComboBox::currentIndexChanged,
+            this, &AppearanceDialog::onTactileChanged);
+    connect(m_cornerCombo, &QComboBox::currentIndexChanged,
+            this, &AppearanceDialog::onTactileChanged);
 
     // 预览用的假条目只造一次。
     // 刻意不扫真实盒目录：一是盒可能本来就是空的（那时预览会一片空白，
@@ -294,7 +413,41 @@ void AppearanceDialog::syncControlsFromAppearance()
         m_opacityLabel->setText(tr("%1%").arg(value));
     }
 
+    // ---- 触感与动画 ----
+    // 这里能直接按值取下标，是因为配置层已经把越界值归一化到预设之一，
+    // m_appearance 里不可能出现预设以外的值。
+    if (m_hoverEffectCheck) {
+        m_hoverEffectCheck->setChecked(m_appearance.hoverEffect
+                                       == BoxAppearance::HoverEffect::Glow);
+    }
+    if (m_strengthCombo) {
+        m_strengthCombo->setCurrentIndex(
+            indexOfPreset(kStrengthOrder, m_appearance.feedbackStrength));
+    }
+    if (m_speedCombo) {
+        m_speedCombo->setCurrentIndex(
+            indexOfPreset(kSpeedOrder, m_appearance.animationSpeed));
+    }
+    if (m_expandDelayCombo) {
+        m_expandDelayCombo->setCurrentIndex(
+            indexOfPreset(BoxAppearance::kHoverExpandDelaysMs,
+                          m_appearance.hoverExpandDelayMs));
+    }
+    if (m_collapseDelayCombo) {
+        m_collapseDelayCombo->setCurrentIndex(
+            indexOfPreset(BoxAppearance::kHoverCollapseDelaysMs,
+                          m_appearance.hoverCollapseDelayMs));
+    }
+    if (m_cornerCombo) {
+        m_cornerCombo->setCurrentIndex(
+            indexOfPreset(BoxAppearance::kCornerRadii, m_appearance.cornerRadius));
+    }
+
     m_syncing = false;
+
+    // 放在 m_syncing 之外：这一步只改控件的可用性，不发值变更信号，
+    // 没有回头触发槽函数的风险。
+    updateTouchControlsEnabled();
 }
 
 void AppearanceDialog::collectAppearanceFromControls()
@@ -307,6 +460,41 @@ void AppearanceDialog::collectAppearanceFromControls()
 
     if (m_opacitySlider) {
         m_appearance.opacity = m_opacitySlider->value();
+    }
+
+    // ---- 触感与动画 ----
+    if (m_hoverEffectCheck) {
+        m_appearance.hoverEffect = m_hoverEffectCheck->isChecked()
+                                       ? BoxAppearance::HoverEffect::Glow
+                                       : BoxAppearance::HoverEffect::Off;
+    }
+    if (m_strengthCombo) {
+        const int i = m_strengthCombo->currentIndex();
+        if (i >= 0 && i < int(sizeof(kStrengthOrder) / sizeof(kStrengthOrder[0])))
+            m_appearance.feedbackStrength = kStrengthOrder[i];
+    }
+    if (m_speedCombo) {
+        const int i = m_speedCombo->currentIndex();
+        if (i >= 0 && i < int(sizeof(kSpeedOrder) / sizeof(kSpeedOrder[0])))
+            m_appearance.animationSpeed = kSpeedOrder[i];
+    }
+    if (m_expandDelayCombo) {
+        const int i = m_expandDelayCombo->currentIndex();
+        if (i >= 0 && i < int(sizeof(BoxAppearance::kHoverExpandDelaysMs)
+                              / sizeof(BoxAppearance::kHoverExpandDelaysMs[0])))
+            m_appearance.hoverExpandDelayMs = BoxAppearance::kHoverExpandDelaysMs[i];
+    }
+    if (m_collapseDelayCombo) {
+        const int i = m_collapseDelayCombo->currentIndex();
+        if (i >= 0 && i < int(sizeof(BoxAppearance::kHoverCollapseDelaysMs)
+                              / sizeof(BoxAppearance::kHoverCollapseDelaysMs[0])))
+            m_appearance.hoverCollapseDelayMs = BoxAppearance::kHoverCollapseDelaysMs[i];
+    }
+    if (m_cornerCombo) {
+        const int i = m_cornerCombo->currentIndex();
+        if (i >= 0 && i < int(sizeof(BoxAppearance::kCornerRadii)
+                              / sizeof(BoxAppearance::kCornerRadii[0])))
+            m_appearance.cornerRadius = BoxAppearance::kCornerRadii[i];
     }
 
     // iconSize 保持 0（跟随 viewMode 推导）。
@@ -355,6 +543,19 @@ void AppearanceDialog::onOpacityChanged(int value)
         m_opacityLabel->setText(tr("%1%").arg(value));
 
     collectAppearanceFromControls();
+    refreshPreview();
+    updateButtonsEnabled();
+}
+
+void AppearanceDialog::onTactileChanged()
+{
+    if (m_syncing)
+        return;
+
+    collectAppearanceFromControls();
+    // 触感关掉时把「反馈强度」置灰：那一刻它不起作用，
+    // 留着可点会让人以为"调了没反应，这功能坏了"。
+    updateTouchControlsEnabled();
     refreshPreview();
     updateButtonsEnabled();
 }
@@ -429,9 +630,64 @@ void AppearanceDialog::refreshPreview()
     m_preview->setItems(m_previewEntries);
     m_preview->applyAppearance(m_appearance);
 
+    // 光影层与内容分开刷：内容变了不代表触感参数变了，
+    // 但两者的入口都收敛在这里，所以顺手同步一次最省心。
+    syncPreviewGlow();
+
     // 透明度：预览区本身保持不透明（它嵌在对话框里，变淡了反而看不清），
     // 所以只用文字提示当前档位，不做视觉模拟。
     // 真实的透明度效果请点「应用」后在桌面浮窗上看 —— 那才是所见即所得。
+}
+
+// ---------------------------------------------------------------------------
+// 预览区的悬停触感
+// ---------------------------------------------------------------------------
+
+bool AppearanceDialog::eventFilter(QObject *watched, QEvent *event)
+{
+    if (m_preview && watched == m_preview) {
+        // 覆盖层不参与布局，预览控件每变一次尺寸就得重新铺满它。
+        if (event->type() == QEvent::Resize && m_previewGlow) {
+            m_previewGlow->setGeometry(m_preview->rect());
+        }
+    } else if (m_previewHost && watched == m_previewHost) {
+        if (m_previewGlow) {
+            if (event->type() == QEvent::Enter) {
+                m_previewGlow->setActive(true);
+            } else if (event->type() == QEvent::Leave) {
+                m_previewGlow->setActive(false);
+            }
+        }
+    }
+
+    return QDialog::eventFilter(watched, event);
+}
+
+void AppearanceDialog::syncPreviewGlow()
+{
+    if (!m_previewGlow)
+        return;
+
+    m_previewGlow->setHoverEffect(m_appearance.hoverEffect);
+    m_previewGlow->setStrength(m_appearance.feedbackStrength);
+    m_previewGlow->setAnimationSpeed(m_appearance.animationSpeed);
+    m_previewGlow->setCornerRadius(m_appearance.cornerRadius);
+
+    // 与真实浮窗同一套规则：全局关掉界面动画时，预览的光影也立即切换、
+    // 不播过渡。从 manager 读而不是自己 new 一个 Settings ——
+    // 两份配置对象读同一个文件，状态有可能不同步。
+    m_previewGlow->setAnimationsEnabled(m_floating ? m_floating->animationsEnabled()
+                                                   : true);
+}
+
+void AppearanceDialog::updateTouchControlsEnabled()
+{
+    // 只有「反馈强度」与触感开关强相关。速度、延迟、圆角都另有作用
+    //（速度管卷起/展开，延迟管自动展开，圆角管窗口外形），
+    // 触感关掉时它们依然生效，所以**不能**一起置灰。
+    const bool glowOn = m_hoverEffectCheck && m_hoverEffectCheck->isChecked();
+    if (m_strengthCombo)
+        m_strengthCombo->setEnabled(glowOn);
 }
 
 void AppearanceDialog::updateButtonsEnabled()

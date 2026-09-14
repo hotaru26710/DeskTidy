@@ -257,7 +257,7 @@ REM 7/9  View-reset guard probe (regression guard for a real fixed bug)
 REM ---------------------------------------------------------------------------
 echo.
 echo ==========================================================
-echo  7/16  View-reset guard (list <-> icon mode switching)
+echo  7/16  View-reset guard (list ^<^-^> icon mode switching)
 echo ==========================================================
 if exist tools\build-viewreset rmdir /s /q tools\build-viewreset
 mkdir tools\build-viewreset
@@ -557,7 +557,45 @@ if errorlevel 1 (
 release\overlap_diag.exe
 if errorlevel 1 (set FAILED=1) else (echo   [OK] overlap regression passed)
 cd ..\..
-
+REM ---------------------------------------------------------------------------
+REM 16/16  Hover feedback (glow) dynamic behaviour
+REM
+REM The glow layer must not disturb the floating-box push/slide logic. Its
+REM contract is that it lives entirely inside a child overlay widget, so it
+REM never touches window size / position / opacity / mask. This probe pins that
+REM down with assertions: geometry, position, opacity and mask must be byte-for
+REM -byte identical after 100 enter/leave cycles.
+REM
+REM It also checks that progress converges under fast crossing between several
+REM boxes, that HoverEffect::Off draws literally nothing, and that turning
+REM animations off makes the glow snap instantly with no intermediate value.
+REM
+REM NOTE: this drives a real event loop and moves the real cursor, so it needs
+REM an interactive desktop session. It briefly opens a few floating windows.
+REM ---------------------------------------------------------------------------
+echo.
+echo ==========================================================
+echo  16/16  Hover feedback (glow) behaviour
+echo ==========================================================
+if exist tools\build-hoverfeedback rmdir /s /q tools\build-hoverfeedback
+mkdir tools\build-hoverfeedback
+cd tools\build-hoverfeedback
+qmake ..\hover_feedback_diag.pro >nul
+if errorlevel 1 (
+    echo [ERROR] hover feedback probe qmake failed
+    set FAILED=1
+    goto :summary
+)
+mingw32-make -j8 > hoverfeedback.log 2>&1
+if errorlevel 1 (
+    echo [ERROR] hover feedback probe build failed
+    findstr /C:"error" hoverfeedback.log
+    set FAILED=1
+    goto :summary
+)
+release\hover_feedback_diag.exe
+if errorlevel 1 (set FAILED=1) else (echo   [OK] hover feedback verified)
+cd ..\..
 REM ---------------------------------------------------------------------------
 REM Cleanup: the deleteBox unit tests and the delete probe really move box
 REM directories into the system recycle bin, and QTemporaryDir cannot

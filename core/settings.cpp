@@ -49,6 +49,21 @@ const QString kKeyFloatIconSizeFmt =
 const QString kKeyFloatOpacityFmt =
     QStringLiteral("floating/opacity/%1");
 
+// 悬停触感与动画（每盒一份）。默认值：Glow / Standard / Standard /
+// 250ms / 400ms / 8px —— 与 BoxAppearance 的默认构造保持一致。
+const QString kKeyFloatHoverEffectFmt =
+    QStringLiteral("floating/hoverEffect/%1");
+const QString kKeyFloatHoverStrengthFmt =
+    QStringLiteral("floating/hoverStrength/%1");
+const QString kKeyFloatAnimationSpeedFmt =
+    QStringLiteral("floating/animationSpeed/%1");
+const QString kKeyFloatHoverExpandDelayFmt =
+    QStringLiteral("floating/hoverExpandDelay/%1");
+const QString kKeyFloatHoverCollapseDelayFmt =
+    QStringLiteral("floating/hoverCollapseDelay/%1");
+const QString kKeyFloatCornerRadiusFmt =
+    QStringLiteral("floating/cornerRadius/%1");
+
 // 把盒名编码成可安全嵌入 QSettings 键名的形式。
 //
 // 为什么需要：QSettings 用 '/' 作层级分隔符，盒名里若出现 '/' 会被解释成
@@ -290,6 +305,24 @@ BoxAppearance Settings::floatAppearance(const QString &boxName) const
     const int op = ini.value(kKeyFloatOpacityFmt.arg(encoded), 100).toInt();
     result.opacity = qBound(BoxAppearance::kMinOpacity, op, 100);
 
+    // 悬停触感与动画：旧配置里根本没有这几个键，读不到就走默认值；
+    // 手工改成非法枚举 / 越界数值时归一化到最近的预设档。
+    result.hoverEffect = BoxAppearance::normalizeHoverEffect(
+        ini.value(kKeyFloatHoverEffectFmt.arg(encoded),
+                  static_cast<int>(BoxAppearance::HoverEffect::Glow)).toInt());
+    result.feedbackStrength = BoxAppearance::normalizeFeedbackStrength(
+        ini.value(kKeyFloatHoverStrengthFmt.arg(encoded),
+                  static_cast<int>(BoxAppearance::FeedbackStrength::Standard)).toInt());
+    result.animationSpeed = BoxAppearance::normalizeAnimationSpeed(
+        ini.value(kKeyFloatAnimationSpeedFmt.arg(encoded),
+                  static_cast<int>(BoxAppearance::AnimationSpeed::Standard)).toInt());
+    result.hoverExpandDelayMs = BoxAppearance::normalizeHoverExpandDelayMs(
+        ini.value(kKeyFloatHoverExpandDelayFmt.arg(encoded), 250).toInt());
+    result.hoverCollapseDelayMs = BoxAppearance::normalizeHoverCollapseDelayMs(
+        ini.value(kKeyFloatHoverCollapseDelayFmt.arg(encoded), 400).toInt());
+    result.cornerRadius = BoxAppearance::normalizeCornerRadius(
+        ini.value(kKeyFloatCornerRadiusFmt.arg(encoded), 8).toInt());
+
     return result;
 }
 
@@ -325,6 +358,49 @@ void Settings::setFloatAppearance(const QString &boxName, const BoxAppearance &a
     else
         ini.setValue(opKey, clamped);
 
+    // ---- 悬停触感与动画（同样只存非默认值） ------------------------------
+    // 写入前统一归一化：调用方传进来的越界值不应该被原样落到 ini 里，
+    // 否则下次读取还得再夹一次，而且配置文件里的值会一直看着不对劲。
+    const auto writeEnumKey = [&ini](const QString &key, int value, int defaultValue) {
+        if (value == defaultValue)
+            ini.remove(key);
+        else
+            ini.setValue(key, value);
+    };
+
+    const QString hoverKey = kKeyFloatHoverEffectFmt.arg(encoded);
+    writeEnumKey(hoverKey,
+                 static_cast<int>(BoxAppearance::normalizeHoverEffect(
+                     static_cast<int>(appearance.hoverEffect))),
+                 static_cast<int>(BoxAppearance::HoverEffect::Glow));
+
+    const QString strengthKey = kKeyFloatHoverStrengthFmt.arg(encoded);
+    writeEnumKey(strengthKey,
+                 static_cast<int>(BoxAppearance::normalizeFeedbackStrength(
+                     static_cast<int>(appearance.feedbackStrength))),
+                 static_cast<int>(BoxAppearance::FeedbackStrength::Standard));
+
+    const QString speedKey = kKeyFloatAnimationSpeedFmt.arg(encoded);
+    writeEnumKey(speedKey,
+                 static_cast<int>(BoxAppearance::normalizeAnimationSpeed(
+                     static_cast<int>(appearance.animationSpeed))),
+                 static_cast<int>(BoxAppearance::AnimationSpeed::Standard));
+
+    const QString expandKey = kKeyFloatHoverExpandDelayFmt.arg(encoded);
+    writeEnumKey(expandKey,
+                 BoxAppearance::normalizeHoverExpandDelayMs(appearance.hoverExpandDelayMs),
+                 250);
+
+    const QString collapseKey = kKeyFloatHoverCollapseDelayFmt.arg(encoded);
+    writeEnumKey(collapseKey,
+                 BoxAppearance::normalizeHoverCollapseDelayMs(appearance.hoverCollapseDelayMs),
+                 400);
+
+    const QString cornerKey = kKeyFloatCornerRadiusFmt.arg(encoded);
+    writeEnumKey(cornerKey,
+                 BoxAppearance::normalizeCornerRadius(appearance.cornerRadius),
+                 8);
+
     ini.sync();
 }
 
@@ -341,6 +417,13 @@ void Settings::clearFloatAppearance(const QString &boxName)
     ini.remove(kKeyFloatViewModeFmt.arg(encoded));
     ini.remove(kKeyFloatIconSizeFmt.arg(encoded));
     ini.remove(kKeyFloatOpacityFmt.arg(encoded));
+    // 触感与动画六项同样是"每盒一份"，一并清掉。
+    ini.remove(kKeyFloatHoverEffectFmt.arg(encoded));
+    ini.remove(kKeyFloatHoverStrengthFmt.arg(encoded));
+    ini.remove(kKeyFloatAnimationSpeedFmt.arg(encoded));
+    ini.remove(kKeyFloatHoverExpandDelayFmt.arg(encoded));
+    ini.remove(kKeyFloatHoverCollapseDelayFmt.arg(encoded));
+    ini.remove(kKeyFloatCornerRadiusFmt.arg(encoded));
     // 钉住状态同样是"每盒一份"，一并清掉。
     ini.remove(kKeyFloatLockedFmt.arg(encoded));
     ini.sync();

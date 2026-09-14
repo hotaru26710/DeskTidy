@@ -45,6 +45,7 @@ SOURCES += \
     ../ui/preferreddropeffect.cpp \
     ../ui/previewdialog.cpp \
     ../ui/floatingboxwidget.cpp \
+    ../ui/floatinghoveroverlay.cpp \
     ../ui/floatingboxmanager.cpp
 
 HEADERS += \
@@ -62,4 +63,5 @@ HEADERS += \
     ../ui/preferreddropeffect.h \
     ../ui/previewdialog.h \
     ../ui/floatingboxwidget.h \
+    ../ui/floatinghoveroverlay.h \
     ../ui/floatingboxmanager.h

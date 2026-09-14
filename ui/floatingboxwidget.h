@@ -52,6 +52,7 @@
 #include "coretypes.h"
 
 class AppService;
+class FloatingHoverOverlay;
 class ItemListWidget;
 
 class QLabel;
@@ -124,6 +125,15 @@ signals:
     // 这个浮窗最主要的用途之一。
     void dragHovered();
     void dragLeft();
+
+    // 拖动窗口开始 / 结束。
+    //
+    // 与 isDragging() 那条查询并存的理由：悬停光影需要在**拖动一开始**就退出
+    //（拖动期间鼠标很容易被甩出窗口边界，靠 enter/leave 记账会留下卡住的光晕），
+    // 而这件事需要一个瞬时事件。isDragging() 只能被反过来问，问不出"刚开始"。
+    // 结束时浮窗再按"鼠标是否还在窗口里"决定要不要恢复光影。
+    void dragStarted();
+    void dragFinished();
 
 protected:
     void mousePressEvent(QMouseEvent *event) override;
@@ -541,6 +551,35 @@ private:
     // 抽出来是因为 contextMenuEvent 已经很长，而这一段自成一块。
     void buildAppearanceMenu(QMenu *parentMenu);
 
+    // ---- 悬停光影触感 ----
+
+    // 把当前外观里的触感四项（开关 / 强度 / 速度 / 圆角）同步到覆盖层。
+    // 由 applyAppearance 调用；覆盖层自己不读配置。
+    void syncHoverOverlay();
+
+    // 按"鼠标是否真的落在窗口里 + 此刻是否处于交互中"重新决定光晕开关。
+    //
+    // 光影的进出**不走 canAutoExpand / shouldAutoCollapse**：那两个是
+    // "自动展开"的判定（关掉自动展开后它们一律为假），而触感是独立的视觉反馈，
+    // 即使全局关掉自动展开也应当照常亮。所以单独一份判定。
+    //
+    // 用几何包含关系而不是 underMouse()：拖动 / 菜单 / 尺寸调整期间，
+    // Qt 内部的 enter/leave 记账恰恰是不可信的时候（与 shouldAutoCollapse 同源）。
+    void refreshHoverGlow();
+
+    // 光影层铺满客户区并抬到最上层。缩放窗口时调用。
+    void layoutHoverOverlay();
+
+    // 会临时打断光影的交互：拖窗口 / 右键菜单 / 拉尺寸 / 拖文件出去。
+    // 这几条与 hoverInteractionBlocked 里的对应项同源，但**不含**"被钉住"
+    // 与"悬停自动展开开关"—— 那两条是"别自动动窗口"，不该把视觉反馈也关掉。
+    bool hoverGlowBlocked() const;
+
+    // 把 m_appearance.cornerRadius 同步到标题栏 / 手柄行的样式与窗口遮罩。
+    // 只有在圆角真的变了、或窗口尺寸/原生窗口重建时才调 setMask()，
+    // 悬停期间绝不调用。
+    void applyCornerRadiusToUi();
+
     // ---- 透明度动画 ----
 
     // 平滑地把窗口透明度动画到 target（0.0–1.0）。
@@ -596,6 +635,12 @@ private:
     BoxAppearance m_appearance;
 
     FloatingBoxTitleBar *m_titleBar   = nullptr;
+
+    // 悬停光影覆盖层。不在布局里 —— 它必须铺满**整个客户区**（含标题栏），
+    // 而任何布局容器都会被拆成若干行，画不出完整的一圈描边。
+    // 由 layoutHoverOverlay() 手动定位、resizeEvent 里跟随。
+    FloatingHoverOverlay *m_hoverOverlay = nullptr;
+
     QWidget             *m_actionBar  = nullptr;    // 「收纳桌面」「撤销」那一行
     ItemListWidget      *m_itemList   = nullptr;
     QWidget             *m_gripRow    = nullptr;    // 右下角尺寸手柄所在的容器行
@@ -751,6 +796,12 @@ private:
     // 而是"正在投放的过程中窗口自己缩起来"—— 那会把主人正要放下的
     // 东西弄丢（缩起后列表被隐藏，drop 就没有接收者了）。
     bool m_dragHoverActive  = false;
+
+    // 最近一次真正下发的圆角半径。
+    // 用途：applyAppearance 会在切视图 / 改透明度时被反复调用，而圆角是
+    // 那一堆项里**唯一**要重设窗口遮罩的。没有这个比较，每次改透明度都会
+    // 白跑一次 setMask()（原生窗口区域调用，离屏实测约 800us/次）。
+    int m_appliedCornerRadius = -1;
 
     // 最近一次下发给原生窗口的圆角遮罩与它的尺寸。
     //

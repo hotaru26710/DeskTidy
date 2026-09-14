@@ -86,9 +86,43 @@ struct BoxAppearance
         LargeIcon = 3   // 大图标网格
     };
 
+    // 悬停触感：鼠标进入浮窗时的光影反馈。
+    //
+    // 只用浮窗内部的透明覆盖层 + 单个 QVariantAnimation 实现，
+    // 不改变窗口尺寸 / 位置 / 透明度，因此不会干扰浮窗推动逻辑。
+    enum class HoverEffect
+    {
+        Off  = 0,   // 关闭触感
+        Glow = 1    // 光影描边（默认）
+    };
+
+    // 触感反馈强度：决定描边 / 高光的 alpha 与线宽。
+    enum class FeedbackStrength
+    {
+        Subtle   = 0,   // 轻微
+        Standard = 1,   // 标准（默认）
+        Strong   = 2    // 明显
+    };
+
+    // 动画速度档位：统一驱动触感 / 卷起展开 / 让位三类动画。
+    // 注意：淡入淡出（透明度）固定 180ms，不受本档位影响。
+    enum class AnimationSpeed
+    {
+        Relaxed  = 0,   // 舒缓
+        Standard = 1,   // 标准（默认）
+        Fast     = 2    // 快速
+    };
+
     ViewMode viewMode = ViewMode::List;
     int      iconSize = 0;      // 0 = 跟随 viewMode 推导；>0 为显式像素
     int      opacity  = 100;    // 百分比 1..100（100 = 完全不透明）
+
+    HoverEffect     hoverEffect     = HoverEffect::Glow;
+    FeedbackStrength feedbackStrength = FeedbackStrength::Standard;
+    AnimationSpeed   animationSpeed   = AnimationSpeed::Standard;
+    int hoverExpandDelayMs   = 250;
+    int hoverCollapseDelayMs = 400;
+    int cornerRadius         = 8;
 
     // 由 viewMode 推导的图标像素（iconSize 为 0 时使用）。
     static int defaultIconSizeFor(ViewMode mode);
@@ -104,6 +138,20 @@ struct BoxAppearance
     // 透明度下限。低于此值浮窗会淡到几乎看不见，
     // 而"主人找不到自己的浮窗"是不可恢复的故障，故设一道硬闸。
     static constexpr int kMinOpacity = 20;
+
+    // ---- 安全预设 ----------------------------------------------------------
+    // 界面只暴露这几档，配置层的非法 / 越界值一律归一化到最近的预设，
+    // 这样手工改配置文件也不会把浮窗搞成不可用的样子。
+    inline static constexpr int kHoverExpandDelaysMs[3]   = { 150, 250, 400 };
+    inline static constexpr int kHoverCollapseDelaysMs[3] = { 250, 400, 600 };
+    inline static constexpr int kCornerRadii[4]           = { 4, 8, 12, 16 };
+
+    static HoverEffect      normalizeHoverEffect(int raw);
+    static FeedbackStrength normalizeFeedbackStrength(int raw);
+    static AnimationSpeed   normalizeAnimationSpeed(int raw);
+    static int              normalizeHoverExpandDelayMs(int raw);
+    static int              normalizeHoverCollapseDelayMs(int raw);
+    static int              normalizeCornerRadius(int raw);
 };
 
 #endif // CORETYPES_H

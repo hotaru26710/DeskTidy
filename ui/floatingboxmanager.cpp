@@ -19,14 +19,19 @@ namespace {
 
 // "先收回、再重推"之间的等待时长。
 //
-// 必须大于一次让位动画（kLayoutSlideDurationMs = 200ms），否则重推时
+// 必须大于最慢一档的让位动画（舒缓档 270ms），否则重推时
 // 读到的还是动画中间的位置，算出来的位移会偏。
-// 留 60ms 余量覆盖定时器精度与事件循环排队。
+// 留 70ms 余量覆盖定时器精度与事件循环排队。
 //
 // 为什么不干脆做成"动画结束再重推"的信号回调：那需要把 manager 和
 // 浮窗的内部动画状态耦合起来，而这里只需要一个"差不多走完了"的时刻。
 // 多等 60ms 对主人来说完全无感（他刚点完一个开关）。
-constexpr int kRelayoutSettleMs = 260;
+//
+// ⚠️ 这个值必须 >= 最慢档的让位时长（舒缓档 270ms），否则"二次重推"会在
+// 第一次让位动画还没跑完时就发动，算出来的位置基于中间帧 ——
+// 那正是历史上出现过的"浮窗互相推着推着就重叠了"。
+// 340ms = 270（最长让位）+ 70 余量。
+constexpr int kRelayoutSettleMs = 340;
 
 } // namespace
 
@@ -333,6 +338,13 @@ void FloatingBoxManager::setAnimationsEnabled(bool on)
     }
 }
 
+bool FloatingBoxManager::animationsEnabled() const
+{
+    // 与 Settings::animationsEnabled 同语义：配置不可用时按"开启"处理。
+    // 不在这一层再兜一次默认值 —— 两处各写一份必然有机会漂移。
+    return m_service->settings()->animationsEnabled();
+}
+
 // ---------------------------------------------------------------------------
 // 悬停自动展开总开关
 // ---------------------------------------------------------------------------
@@ -382,7 +394,7 @@ void FloatingBoxManager::setBoxLocked(const QString &boxName, bool locked)
     // ⚠️ 收回是**异步动画**。所以这里不能马上接着算推动 ——
     // 那时窗口还在半路上，layoutItemsExcept 读到的 frameGeometry()
     // 是动画中间值，算出来的位移会偏。先等一轮动画走完
-    //（kLayoutSlideDurationMs 是 200ms，留 260ms 余量），
+    //（舒缓档让位是 270ms，落定等待是 340ms），
     // 再重新协调。用 singleShot 而不是阻塞等待：阻塞会把整个界面冻住。
     for (FloatingBoxWidget *w : std::as_const(m_widgets)) {
         if (w && w->isPushedAside()) {

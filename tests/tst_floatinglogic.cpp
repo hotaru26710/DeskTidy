@@ -1652,7 +1652,396 @@ private slots:
         QVERIFY2(!s.floatLocked(box),
                  "clearFloatAppearance 应当把钉住一并清掉（防同名盒继承）");
     }
+    // =======================================================================
+    // F 组：悬停触感与每盒动画选项
+    //
+    // 新增六个**每盒一份**的外观字段。它们与既有的 viewMode/opacity 走同一套
+    // 配置机制（Base64Url 键 + 只存非默认值），所以这里测的是"六项各自都接对了"，
+    // 而不是重复测那套协议本身。
+    // =======================================================================
+
+    // 与 Settings 内部 encodeBoxName 同一策略（Base64Url + 去掉结尾 '='）。
+    // 本组需要直接往 ini 里写"非法值 / 只有旧键"的原始内容来模拟手工改配置
+    // 与旧版本留下的配置文件，绕不过去。
+    static QString encodeBoxKey(const QString &name)
+    {
+        return QString::fromLatin1(
+            name.toUtf8().toBase64(QByteArray::Base64UrlEncoding
+                                   | QByteArray::OmitTrailingEquals));
+    }
+
+    static QString floatingIniPath()
+    {
+        return QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation)
+               + QStringLiteral("/DeskTidy.ini");
+    }
+
+    // F-01 默认值，以及 isDefault 必须把六项全算进去。
+    //
+    // 防的是：往结构体里加了字段却忘了加进 isDefault ——
+    // 那样"关掉触感"会被判成默认，于是这个选择永远落不了盘，
+    // 关上浮窗再打开又变回亮着，而"恢复默认"也清不掉它。
+    void tactileDefaultsAndIsDefaultDetection()
+    {
+        BoxAppearance a;
+        QCOMPARE(a.hoverEffect, BoxAppearance::HoverEffect::Glow);
+        QCOMPARE(a.feedbackStrength, BoxAppearance::FeedbackStrength::Standard);
+        QCOMPARE(a.animationSpeed, BoxAppearance::AnimationSpeed::Standard);
+        QCOMPARE(a.hoverExpandDelayMs, 250);
+        QCOMPARE(a.hoverCollapseDelayMs, 400);
+        QCOMPARE(a.cornerRadius, 8);
+        QVERIFY2(a.isDefault(), "默认构造的浮窗外观应当每一项都是默认值");
+
+        BoxAppearance x;
+
+        x = BoxAppearance();
+        x.hoverEffect = BoxAppearance::HoverEffect::Off;
+        QVERIFY2(!x.isDefault(), "关掉触感就不再是默认");
+
+        x = BoxAppearance();
+        x.feedbackStrength = BoxAppearance::FeedbackStrength::Strong;
+        QVERIFY2(!x.isDefault(), "改了反馈强度就不再是默认");
+
+        x = BoxAppearance();
+        x.animationSpeed = BoxAppearance::AnimationSpeed::Fast;
+        QVERIFY2(!x.isDefault(), "改了动画速度就不再是默认");
+
+        x = BoxAppearance();
+        x.hoverExpandDelayMs = 150;
+        QVERIFY2(!x.isDefault(), "改了展开延迟就不再是默认");
+
+        x = BoxAppearance();
+        x.hoverCollapseDelayMs = 600;
+        QVERIFY2(!x.isDefault(), "改了收起延迟就不再是默认");
+
+        x = BoxAppearance();
+        x.cornerRadius = 16;
+        QVERIFY2(!x.isDefault(), "改了圆角就不再是默认");
+    }
+
+    // F-02 归一化函数本身：枚举夹到有效区间，数值取最近的预设。
+    //
+    // 不依赖落盘，任何环境都跑。
+    void tactileValueNormalization()
+    {
+        // 触感开关只有两档：越界一律夹到 0 / 1
+        QCOMPARE(BoxAppearance::normalizeHoverEffect(-1),
+                 BoxAppearance::HoverEffect::Off);
+        QCOMPARE(BoxAppearance::normalizeHoverEffect(1),
+                 BoxAppearance::HoverEffect::Glow);
+        QCOMPARE(BoxAppearance::normalizeHoverEffect(7),
+                 BoxAppearance::HoverEffect::Glow);
+
+        // 强度 / 速度三档
+        QCOMPARE(BoxAppearance::normalizeFeedbackStrength(-3),
+                 BoxAppearance::FeedbackStrength::Subtle);
+        QCOMPARE(BoxAppearance::normalizeFeedbackStrength(2),
+                 BoxAppearance::FeedbackStrength::Strong);
+        QCOMPARE(BoxAppearance::normalizeFeedbackStrength(99),
+                 BoxAppearance::FeedbackStrength::Strong);
+        QCOMPARE(BoxAppearance::normalizeAnimationSpeed(-3),
+                 BoxAppearance::AnimationSpeed::Relaxed);
+        QCOMPARE(BoxAppearance::normalizeAnimationSpeed(2),
+                 BoxAppearance::AnimationSpeed::Fast);
+        QCOMPARE(BoxAppearance::normalizeAnimationSpeed(99),
+                 BoxAppearance::AnimationSpeed::Fast);
+
+        // 展开延迟预设 150 / 250 / 400
+        QCOMPARE(BoxAppearance::normalizeHoverExpandDelayMs(-100), 150);
+        QCOMPARE(BoxAppearance::normalizeHoverExpandDelayMs(160), 150);
+        QCOMPARE(BoxAppearance::normalizeHoverExpandDelayMs(240), 250);
+        QCOMPARE(BoxAppearance::normalizeHoverExpandDelayMs(5000), 400);
+        // 正好落在两档正中间时取较小档（确定性优先）
+        QCOMPARE(BoxAppearance::normalizeHoverExpandDelayMs(200), 150);
+        QCOMPARE(BoxAppearance::normalizeHoverExpandDelayMs(325), 250);
+
+        // 收起延迟预设 250 / 400 / 600
+        QCOMPARE(BoxAppearance::normalizeHoverCollapseDelayMs(-100), 250);
+        QCOMPARE(BoxAppearance::normalizeHoverCollapseDelayMs(300), 250);
+        QCOMPARE(BoxAppearance::normalizeHoverCollapseDelayMs(450), 400);
+        QCOMPARE(BoxAppearance::normalizeHoverCollapseDelayMs(5000), 600);
+
+        // 圆角预设 4 / 8 / 12 / 16
+        QCOMPARE(BoxAppearance::normalizeCornerRadius(-100), 4);
+        QCOMPARE(BoxAppearance::normalizeCornerRadius(0), 4);
+        QCOMPARE(BoxAppearance::normalizeCornerRadius(9), 8);
+        QCOMPARE(BoxAppearance::normalizeCornerRadius(10), 8);   // 等距取小档
+        QCOMPARE(BoxAppearance::normalizeCornerRadius(11), 12);
+        QCOMPARE(BoxAppearance::normalizeCornerRadius(5000), 16);
+    }
+
+    // F-03 全部预设都能原样往返。
+    //
+    // 防的是：界面能选到、配置层却读不回来的档位 ——
+    // 表现是"点了应用之后过一会儿又弹回上一档"，而且只在某些档位出现。
+    void tactilePresetsRoundTrip()
+    {
+        if (!m_configWritable)
+            QSKIP("配置目录不可写（受限环境）");
+
+        Settings s;
+        const QString box = QStringLiteral("触感预设往返");
+
+        for (const int ms : BoxAppearance::kHoverExpandDelaysMs) {
+            BoxAppearance a;
+            a.hoverExpandDelayMs = ms;
+            s.setFloatAppearance(box, a);
+            QCOMPARE(s.floatAppearance(box).hoverExpandDelayMs, ms);
+        }
+
+        for (const int ms : BoxAppearance::kHoverCollapseDelaysMs) {
+            BoxAppearance a;
+            a.hoverCollapseDelayMs = ms;
+            s.setFloatAppearance(box, a);
+            QCOMPARE(s.floatAppearance(box).hoverCollapseDelayMs, ms);
+        }
+
+        for (const int px : BoxAppearance::kCornerRadii) {
+            BoxAppearance a;
+            a.cornerRadius = px;
+            s.setFloatAppearance(box, a);
+            QCOMPARE(s.floatAppearance(box).cornerRadius, px);
+        }
+
+        for (const auto strength : {BoxAppearance::FeedbackStrength::Subtle,
+                                    BoxAppearance::FeedbackStrength::Standard,
+                                    BoxAppearance::FeedbackStrength::Strong}) {
+            BoxAppearance a;
+            a.feedbackStrength = strength;
+            s.setFloatAppearance(box, a);
+            QCOMPARE(s.floatAppearance(box).feedbackStrength, strength);
+        }
+
+        for (const auto speed : {BoxAppearance::AnimationSpeed::Relaxed,
+                                 BoxAppearance::AnimationSpeed::Standard,
+                                 BoxAppearance::AnimationSpeed::Fast}) {
+            BoxAppearance a;
+            a.animationSpeed = speed;
+            s.setFloatAppearance(box, a);
+            QCOMPARE(s.floatAppearance(box).animationSpeed, speed);
+        }
+
+        for (const auto effect : {BoxAppearance::HoverEffect::Off,
+                                  BoxAppearance::HoverEffect::Glow}) {
+            BoxAppearance a;
+            a.hoverEffect = effect;
+            s.setFloatAppearance(box, a);
+            QCOMPARE(s.floatAppearance(box).hoverEffect, effect);
+        }
+
+        s.clearFloatAppearance(box);
+    }
+
+    // F-04 六项都是**每盒一份**。
+    //
+    // 防的是：键名忘了带盒名占位（复制粘贴时最容易漏），
+    // 表现是"给一个盒关掉触感，所有盒都跟着不亮了"。
+    void tactileIsIndependentPerBox()
+    {
+        if (!m_configWritable)
+            QSKIP("配置目录不可写（受限环境）");
+
+        Settings s;
+        const QString a = QStringLiteral("触感独立性A");
+        const QString b = QStringLiteral("触感独立性B");
+
+        BoxAppearance loud;
+        loud.hoverEffect      = BoxAppearance::HoverEffect::Off;
+        loud.feedbackStrength = BoxAppearance::FeedbackStrength::Strong;
+        loud.animationSpeed   = BoxAppearance::AnimationSpeed::Fast;
+        loud.hoverExpandDelayMs   = 150;
+        loud.hoverCollapseDelayMs = 600;
+        loud.cornerRadius         = 16;
+        s.setFloatAppearance(a, loud);
+
+        const BoxAppearance readA = s.floatAppearance(a);
+        const BoxAppearance readB = s.floatAppearance(b);
+
+        QCOMPARE(readA.hoverEffect, BoxAppearance::HoverEffect::Off);
+        QCOMPARE(readA.feedbackStrength, BoxAppearance::FeedbackStrength::Strong);
+        QCOMPARE(readA.animationSpeed, BoxAppearance::AnimationSpeed::Fast);
+        QCOMPARE(readA.hoverExpandDelayMs, 150);
+        QCOMPARE(readA.hoverCollapseDelayMs, 600);
+        QCOMPARE(readA.cornerRadius, 16);
+
+        QVERIFY2(readB.isDefault(), "另一个盒六个新字段都应当是默认值");
+
+        s.clearFloatAppearance(a);
+    }
+
+    // F-05 六项取默认值时**不落键**。
+    //
+    // 防的是：默认值也被写进 ini，配置里为每个盒留六行恒等于默认的噪声 ——
+    // 与 floatRolledUp / 外观既有三项的约定一致。
+    void tactileDefaultsAreNotPersisted()
+    {
+        if (!m_configWritable)
+            QSKIP("配置目录不可写（受限环境）");
+
+        Settings s;
+        const QString box = QStringLiteral("触感默认不落键");
+        const QString enc = encodeBoxKey(box);
+
+        // 先写一组非默认值，再写回默认 —— 键应当被清掉，而不是留着。
+        BoxAppearance custom;
+        custom.hoverEffect        = BoxAppearance::HoverEffect::Off;
+        custom.feedbackStrength   = BoxAppearance::FeedbackStrength::Strong;
+        custom.animationSpeed     = BoxAppearance::AnimationSpeed::Fast;
+        custom.hoverExpandDelayMs = 150;
+        custom.hoverCollapseDelayMs = 600;
+        custom.cornerRadius         = 16;
+        s.setFloatAppearance(box, custom);
+        QVERIFY(!s.floatAppearance(box).isDefault());
+
+        s.setFloatAppearance(box, BoxAppearance());
+        QVERIFY2(s.floatAppearance(box).isDefault(), "写回默认后应当读出默认外观");
+
+        const QStringList tactileKeys = {
+            QStringLiteral("floating/hoverEffect/%1").arg(enc),
+            QStringLiteral("floating/hoverStrength/%1").arg(enc),
+            QStringLiteral("floating/animationSpeed/%1").arg(enc),
+            QStringLiteral("floating/hoverExpandDelay/%1").arg(enc),
+            QStringLiteral("floating/hoverCollapseDelay/%1").arg(enc),
+            QStringLiteral("floating/cornerRadius/%1").arg(enc),
+        };
+        QSettings ini(floatingIniPath(), QSettings::IniFormat);
+        for (const QString &key : tactileKeys) {
+            QVERIFY2(!ini.contains(key),
+                     qPrintable(QStringLiteral("默认值不该落键，却留下了 %1")
+                                    .arg(key)));
+        }
+    }
+
+    // F-06 删盒时六个新键一并清掉。
+    //
+    // 与既有外观三项同理：不清的话，将来建一个同名盒会"继承"上一个盒的手感，
+    // 而主人完全不知道为什么新盒一上来就是关着触感的。
+    void clearAppearanceRemovesAllTactileKeys()
+    {
+        if (!m_configWritable)
+            QSKIP("配置目录不可写（受限环境）");
+
+        Settings s;
+        const QString box = QStringLiteral("触感待清理");
+        const QString enc = encodeBoxKey(box);
+
+        BoxAppearance a;
+        a.hoverEffect        = BoxAppearance::HoverEffect::Off;
+        a.feedbackStrength   = BoxAppearance::FeedbackStrength::Strong;
+        a.animationSpeed     = BoxAppearance::AnimationSpeed::Fast;
+        a.hoverExpandDelayMs = 400;
+        a.hoverCollapseDelayMs = 250;
+        a.cornerRadius         = 12;
+        s.setFloatAppearance(box, a);
+        QVERIFY(!s.floatAppearance(box).isDefault());
+
+        const QStringList tactileKeys = {
+            QStringLiteral("floating/hoverEffect/%1").arg(enc),
+            QStringLiteral("floating/hoverStrength/%1").arg(enc),
+            QStringLiteral("floating/animationSpeed/%1").arg(enc),
+            QStringLiteral("floating/hoverExpandDelay/%1").arg(enc),
+            QStringLiteral("floating/hoverCollapseDelay/%1").arg(enc),
+            QStringLiteral("floating/cornerRadius/%1").arg(enc),
+        };
+
+        // 先确认六个键确实都写下去了 —— 否则下面的"清理干净"是假通过。
+        {
+            QSettings ini(floatingIniPath(), QSettings::IniFormat);
+            for (const QString &key : tactileKeys)
+                QVERIFY2(ini.contains(key),
+                         qPrintable(QStringLiteral("非默认值应当落键：%1").arg(key)));
+        }
+
+        s.clearFloatAppearance(box);
+
+        {
+            QSettings ini(floatingIniPath(), QSettings::IniFormat);
+            for (const QString &key : tactileKeys) {
+                QVERIFY2(!ini.contains(key),
+                         qPrintable(QStringLiteral("清理后不该残留 %1").arg(key)));
+            }
+        }
+
+        QVERIFY2(s.floatAppearance(box).isDefault(),
+                 "清理后应当读回默认外观（触感默认是开着的）");
+    }
+
+    // F-07 旧版本留下的配置文件能平滑升级。
+    //
+    // 升级前 ini 里只有外观三项，没有这六个键。读的时候必须补齐默认值，
+    // 而不是变成"读到 0 / 空"，那样触感会被读成关闭、圆角变成 4px。
+    void tactileOldConfigGetsDefaults()
+    {
+        if (!m_configWritable)
+            QSKIP("配置目录不可写（受限环境）");
+
+        const QString box = QStringLiteral("老配置升级");
+        const QString enc = encodeBoxKey(box);
+
+        // 手工写一份"旧版本"的配置：只有既有的三项，且都不是默认值。
+        {
+            QSettings ini(floatingIniPath(), QSettings::IniFormat);
+            ini.setValue(QStringLiteral("floating/viewMode/%1").arg(enc), 3);
+            ini.setValue(QStringLiteral("floating/opacity/%1").arg(enc), 70);
+            ini.sync();
+        }
+
+        Settings s;
+        const BoxAppearance got = s.floatAppearance(box);
+
+        // 旧三项照旧保留
+        QCOMPARE(got.viewMode, BoxAppearance::ViewMode::LargeIcon);
+        QCOMPARE(got.opacity, 70);
+
+        // 新六项补默认值 —— 尤其触感必须是"开着"，而不是被读成 Off。
+        QCOMPARE(got.hoverEffect, BoxAppearance::HoverEffect::Glow);
+        QCOMPARE(got.feedbackStrength, BoxAppearance::FeedbackStrength::Standard);
+        QCOMPARE(got.animationSpeed, BoxAppearance::AnimationSpeed::Standard);
+        QCOMPARE(got.hoverExpandDelayMs, 250);
+        QCOMPARE(got.hoverCollapseDelayMs, 400);
+        QCOMPARE(got.cornerRadius, 8);
+
+        s.clearFloatAppearance(box);
+    }
+
+    // F-08 手工改坏的配置值会在读取时被归一化。
+    //
+    // ini 是可以被主人直接编辑的，不能假设它一定合法。这里直接写坏值进去，
+    // 走**读取**路径（而不是 setFloatAppearance 的写入路径，那一条自己会归一化），
+    // 才能验证"手工改坏不会让浮窗变成不可用"。
+    void tactileCorruptConfigIsNormalizedOnRead()
+    {
+        if (!m_configWritable)
+            QSKIP("配置目录不可写（受限环境）");
+
+        const QString box = QStringLiteral("触感坏配置");
+        const QString enc = encodeBoxKey(box);
+
+        {
+            QSettings ini(floatingIniPath(), QSettings::IniFormat);
+            ini.setValue(QStringLiteral("floating/hoverEffect/%1").arg(enc), 42);
+            ini.setValue(QStringLiteral("floating/hoverStrength/%1").arg(enc), -9);
+            ini.setValue(QStringLiteral("floating/animationSpeed/%1").arg(enc), 88);
+            ini.setValue(QStringLiteral("floating/hoverExpandDelay/%1").arg(enc), 3);
+            ini.setValue(QStringLiteral("floating/hoverCollapseDelay/%1").arg(enc), 99999);
+            ini.setValue(QStringLiteral("floating/cornerRadius/%1").arg(enc), -4);
+            ini.sync();
+        }
+
+        Settings s;
+        const BoxAppearance got = s.floatAppearance(box);
+
+        QCOMPARE(got.hoverEffect, BoxAppearance::HoverEffect::Glow);   // 42 夹到 1
+        QCOMPARE(got.feedbackStrength, BoxAppearance::FeedbackStrength::Subtle);
+        QCOMPARE(got.animationSpeed, BoxAppearance::AnimationSpeed::Fast);
+        QCOMPARE(got.hoverExpandDelayMs, 150);      // 3 -> 最近的 150
+        QCOMPARE(got.hoverCollapseDelayMs, 600);    // 99999 -> 最近的 600
+        QCOMPARE(got.cornerRadius, 4);              // -4 -> 最近的 4
+
+        s.clearFloatAppearance(box);
+    }
 };
+
 
 // ---------------------------------------------------------------------------
 // 关于 TrayIcon 为什么不在这里测

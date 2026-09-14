@@ -26,8 +26,10 @@
 #include "coretypes.h"          // StorageBox / BoxAppearance 按值使用，须完整类型
 
 class FloatingBoxManager;
+class FloatingHoverOverlay;
 class ItemListWidget;
 
+class QCheckBox;
 class QComboBox;
 class QLabel;
 class QPushButton;
@@ -52,10 +54,19 @@ public:
     // 主人最终选中的盒名。无盒时为空串。
     QString selectedBoxName() const;
 
+protected:
+    // 只管预览区的两件事：
+    //   * QEvent::Resize —— 把光影覆盖层重新铺满预览控件（它不参与布局）；
+    //   * Enter / Leave  —— 按鼠标进出驱动覆盖层的亮起与消退。
+    // 用它而不是继承/改造 ItemListWidget：对话框只需要知道"鼠标在不在预览上"，
+    // 为此多开一个控件子类不划算。
+    bool eventFilter(QObject *watched, QEvent *event) override;
+
 private slots:
     void onBoxChanged(int index);
     void onViewModeChanged();
     void onOpacityChanged(int value);
+    void onTactileChanged();
     void onApply();
     void onResetToDefault();
 
@@ -72,6 +83,14 @@ private:
 
     // 按当前设置刷新预览区（改视图/透明度时实时调用，不需要点应用）。
     void refreshPreview();
+
+    // 把触感相关的五项（开关/强度/速度/圆角）同步给预览区的光影覆盖层。
+    // 与 refreshPreview 分开：那个管预览的内容与视图，这个只管光影层。
+    void syncPreviewGlow();
+
+    // 触感关闭时把「反馈强度」置灰 —— 那一刻它没有任何作用，
+    // 留着可点会让人以为调了没反应。
+    void updateTouchControlsEnabled();
 
     // 当前选中盒；无盒或未选中时 name 为空串。
     StorageBox currentBox() const;
@@ -95,6 +114,20 @@ private:
     QLabel         *m_opacityLabel  = nullptr;
     QLabel         *m_hintLabel     = nullptr;
     ItemListWidget *m_preview       = nullptr;
+
+    // ---- 触感与动画（每盒一份）----
+    QCheckBox      *m_hoverEffectCheck  = nullptr;
+    QComboBox      *m_strengthCombo     = nullptr;
+    QComboBox      *m_speedCombo        = nullptr;
+    QComboBox      *m_expandDelayCombo  = nullptr;
+    QComboBox      *m_collapseDelayCombo = nullptr;
+    QComboBox      *m_cornerCombo       = nullptr;
+    QLabel         *m_touchHintLabel    = nullptr;
+
+    // 预览区的光影覆盖层（不参与布局），以及它挂靠的那个容器。
+    // 容器负责收 Enter/Leave —— 预览控件本身是鼠标穿透的，收不到。
+    FloatingHoverOverlay *m_previewGlow = nullptr;
+    QWidget              *m_previewHost = nullptr;
 
     QPushButton    *m_resetBtn = nullptr;
     QPushButton    *m_applyBtn = nullptr;

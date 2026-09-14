@@ -27,6 +27,7 @@ SOURCES += \
     ../core/opener.cpp \
     ../ui/itemlistwidget.cpp \
     ../ui/floatingboxwidget.cpp \
+    ../ui/floatinghoveroverlay.cpp \
     ../ui/floatingboxmanager.cpp \
     ../core/windowlayout.cpp \
     ../ui/preferreddropeffect.cpp \
@@ -44,6 +45,7 @@ HEADERS += \
     ../core/opener.h \
     ../ui/itemlistwidget.h \
     ../ui/floatingboxwidget.h \
+    ../ui/floatinghoveroverlay.h \
     ../ui/floatingboxmanager.h \
     ../core/windowlayout.h \
     ../ui/preferreddropeffect.h \

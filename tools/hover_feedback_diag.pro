@@ -4,28 +4,23 @@ CONFIG += c++17 console
 CONFIG -= app_bundle
 
 # ---------------------------------------------------------------------------
-# hover_diag —— 悬停自动展开 / 离开自动卷起的行为验证。
+# hover_feedback_diag —— 悬停触感（光影描边）的动态行为验证。
 #
-# 这个探针是必要的，因为单测覆盖不到这件事：悬停展开的全部逻辑都挂在
-# "定时器到点"和"鼠标进出事件"上，而这两样都必须有**真事件循环**才会跑。
-# 单测里那种"直接调函数看返回值"的写法，对"250ms 后到底有没有展开"
-# 一个字都说明不了。
+# 与 hover_diag 同源：必须要真事件循环才能验证的三件事
+#   1) 连续 / 快速进出后进度收敛；
+#   2) 快速跨多个浮窗时各自收敛；
+#   3) 整个过程不改动窗口尺寸 / 位置 / 透明度 / 遮罩。
 #
-# 这里用 QApplication::sendEvent 手工投递 QEnterEvent / QEvent::Leave，
-# 再用 QEventLoop + QTimer 推进真实时间，让悬停定时器自然到点。
-#
-# ⚠️ 已知局限：手工投递事件绕过了窗口系统，所以"真实鼠标移动是否会产生
-# enter/leave"这件事**没有被验证**。探针验证的是"收到事件之后的逻辑对不对"。
-# 真实手感需要人工把鼠标移上去确认。
+# 依赖链与 hover_diag 完全一致（浮窗会用真的 AppService / ItemListWidget）。
 # ---------------------------------------------------------------------------
 
-TARGET = hover_diag
+TARGET = hover_feedback_diag
 TEMPLATE = app
 
 INCLUDEPATH += .. ../core ../ui
 
 SOURCES += \
-    hover_diag.cpp \
+    hover_feedback_diag.cpp \
     ../core/coretypes.cpp \
     ../core/corenames.cpp \
     ../core/settings.cpp \

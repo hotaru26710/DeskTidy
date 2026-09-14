@@ -104,6 +104,14 @@ public:
     //（它们归本类所有，这正是本类存在的意义），它没有别的办法通知到它们。
     void setAnimationsEnabled(bool on);
 
+    // 界面动画总开关的**当前值**。
+    //
+    // 与 setAnimationsEnabled 成对：外观对话框的预览区也需要知道这件事 ——
+    // 全局动画关掉时预览的光影应当立即切换、不播过渡，与真实浮窗完全一致。
+    // 让对话框自己去 new 一个 Settings 会有两份配置对象读同一份文件，
+    // 状态可能不同步；从 manager 读就没有这个问题。
+    bool animationsEnabled() const;
+
     // ---- 悬停自动展开总开关 ----
     //
     // 写配置 + 通知所有已开浮窗。与 setAnimationsEnabled 完全同构：
