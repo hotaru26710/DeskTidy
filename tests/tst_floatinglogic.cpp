@@ -14,6 +14,7 @@
 #include "coretypes.h"
 #include "floatingboxmanager.h"
 #include "floatingboxwidget.h"
+#include "itemlistwidget.h"
 #include "settings.h"
 #include "windowlayout.h"
 
@@ -742,6 +743,41 @@ private slots:
     // =======================================================================
     // 浮窗外观（BoxAppearance 纯函数 + Settings 每盒一份的配置）
     // =======================================================================
+
+    // 防的是：浮窗只应该把 .docx/.txt/.lnk 这类扩展名藏起来，
+    // 不能把真实路径也改掉，也不能误伤文件夹与 .gitignore 这类点文件。
+    void floatingItemListHidesFileExtensions()
+    {
+        DesktopEntry file;
+        file.filePath = QStringLiteral("C:/DeskTidy/报告.docx");
+        file.name = QStringLiteral("报告.docx");
+        file.isDir = false;
+
+        DesktopEntry folder;
+        folder.filePath = QStringLiteral("C:/DeskTidy/资料");
+        folder.name = QStringLiteral("资料");
+        folder.isDir = true;
+
+        DesktopEntry dotfile;
+        dotfile.filePath = QStringLiteral("C:/DeskTidy/.gitignore");
+        dotfile.name = QStringLiteral(".gitignore");
+        dotfile.isDir = false;
+
+        ItemListWidget::Options options;
+        options.hideExtensions = true;
+        ItemListWidget list(options);
+        list.setItems({file, folder, dotfile});
+
+        QCOMPARE(list.count(), 3);
+        QCOMPARE(list.item(0)->text(), QStringLiteral("报告"));
+        QCOMPARE(list.item(0)->data(Qt::UserRole).toString(), file.filePath);
+        QCOMPARE(list.item(1)->text(), QStringLiteral("资料"));
+        QCOMPARE(list.item(2)->text(), QStringLiteral(".gitignore"));
+
+        ItemListWidget defaultList;
+        defaultList.setItems({file});
+        QCOMPARE(defaultList.item(0)->text(), file.name);
+    }
 
     // 防的是：图标尺寸档位算错，导致"选了大图标还是小图标"。
     void appearanceIconSizeDerivation()

@@ -93,6 +93,17 @@ QString urlIconFile(const QString &urlPath)
     return QString();
 }
 
+// 浮窗里显示文件名时去掉扩展名；文件夹和以点开头、没有正式扩展名的
+// 隐藏文件保持原名。这里只改展示文字，真实路径始终走 DesktopEntry::filePath。
+QString itemDisplayName(const DesktopEntry &entry, bool hideExtensions)
+{
+    if (!hideExtensions || entry.isDir)
+        return entry.name;
+
+    const QString baseName = QFileInfo(entry.name).completeBaseName();
+    return baseName.isEmpty() ? entry.name : baseName;
+}
+
 } // namespace
 
 ItemListWidget::ItemListWidget(QWidget *parent)
@@ -286,7 +297,8 @@ void ItemListWidget::setItems(const QList<DesktopEntry> &items)
     const QString hint = doubleClickHint();
 
     for (const DesktopEntry &entry : items) {
-        auto *item = new QListWidgetItem(entry.name, this);
+        auto *item = new QListWidgetItem(
+            itemDisplayName(entry, m_options.hideExtensions), this);
         item->setData(Qt::UserRole, entry.filePath);
 
         // 大小与时间放进 tooltip：列表本身保持干净，信息按需可见。

@@ -50,6 +50,10 @@ public:
         DoubleClickAction doubleClick   = DoubleClickAction::Restore;
         bool              draggableOut  = false;   // 是否允许把条目拖出
 
+        // 是否隐藏文件扩展名（浮窗专用）。只影响列表里显示的文字，
+        // 条目实际路径仍保存在 Qt::UserRole，打开/还原/拖出都不受影响。
+        bool              hideExtensions = false;
+
         // 外观（浮窗专用）。默认值 = 改造前行为（列表模式），
         // 主窗口不传 Options 时这一组全走默认，连 setViewMode 都不会被调到。
         BoxAppearance::ViewMode viewMode = BoxAppearance::ViewMode::List;

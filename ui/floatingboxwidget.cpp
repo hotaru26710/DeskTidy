@@ -678,6 +678,7 @@ void FloatingBoxWidget::buildUi()
     ItemListWidget::Options opts;
     opts.doubleClick  = ItemListWidget::DoubleClickAction::Open;
     opts.draggableOut = true;
+    opts.hideExtensions = true;
 
     m_itemList = new ItemListWidget(opts, this);
     // ⚠️ 列表的底色**不能用样式表设**。
