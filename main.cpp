@@ -67,7 +67,7 @@ int main(int argc, char *argv[])
     app.setOrganizationName(QStringLiteral("DeskTidy"));
     app.setApplicationName(QStringLiteral("DeskTidy"));
     app.setApplicationDisplayName(QStringLiteral("DeskTidy"));
-    app.setApplicationVersion(QStringLiteral("1.0"));
+    app.setApplicationVersion(QStringLiteral("1.0.0"));
 
     app.setFont(pickUiFont());
 

@@ -1,4 +1,5 @@
 QT += core gui widgets
+VERSION = 1.0.0
 
 CONFIG += c++17
 
