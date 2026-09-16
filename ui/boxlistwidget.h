@@ -37,6 +37,9 @@ public:
     // 找到并选中返回 true，未找到返回 false 且不改变当前选中。
     bool selectBoxByName(const QString &name);
 
+    // 应用全局主题颜色。
+    void setTheme(const AppTheme &theme);
+
 signals:
     // 选中项变化时发出，供主窗口联动刷新右栏。
     void boxSelectionChanged(const QString &boxName);

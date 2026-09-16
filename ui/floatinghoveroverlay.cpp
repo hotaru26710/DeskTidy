@@ -1,6 +1,7 @@
 #include "floatinghoveroverlay.h"
 
 #include <QPainter>
+#include <QPainterPath>
 #include <QPaintEvent>
 #include <QPen>
 #include <QRectF>
@@ -30,8 +31,46 @@ FeedbackStyle styleFor(BoxAppearance::FeedbackStrength strength)
     return FeedbackStyle{ 150, 90, 1.5 };
 }
 
-// 主题蓝。与界面主色保持一致，避免触感像是外挂上去的。
-const QColor kGlowColor(0x1A, 0x73, 0xE8);
+QPainterPath roundedPath(const QRectF &rect, qreal radius, int smoothing)
+{
+    QPainterPath path;
+    const qreal maxRadius = qMin(rect.width(), rect.height()) / 2.0;
+    radius = qMax<qreal>(0.0, qMin(radius, maxRadius));
+
+    if (radius <= 0.0) {
+        path.addRect(rect);
+        return path;
+    }
+
+    if (smoothing <= 0) {
+        path.addRoundedRect(rect, radius, radius);
+        return path;
+    }
+
+    const qreal k = smoothing == 1 ? 0.55228475 : 0.78;
+    const qreal cx = radius * k;
+    const qreal cy = radius * k;
+
+    path.moveTo(rect.left() + radius, rect.top());
+    path.lineTo(rect.right() - radius, rect.top());
+    path.cubicTo(rect.right() - radius + cx, rect.top(),
+                 rect.right(), rect.top() + radius - cy,
+                 rect.right(), rect.top() + radius);
+    path.lineTo(rect.right(), rect.bottom() - radius);
+    path.cubicTo(rect.right(), rect.bottom() - radius + cy,
+                 rect.right() - radius + cx, rect.bottom(),
+                 rect.right() - radius, rect.bottom());
+    path.lineTo(rect.left() + radius, rect.bottom());
+    path.cubicTo(rect.left() + radius - cx, rect.bottom(),
+                 rect.left(), rect.bottom() - radius + cy,
+                 rect.left(), rect.bottom() - radius);
+    path.lineTo(rect.left(), rect.top() + radius);
+    path.cubicTo(rect.left(), rect.top() + radius - cy,
+                 rect.left() + radius - cx, rect.top(),
+                 rect.left() + radius, rect.top());
+    path.closeSubpath();
+    return path;
+}
 
 } // namespace
 
@@ -110,6 +149,30 @@ void FloatingHoverOverlay::setCornerRadius(int radius)
         update();
 }
 
+void FloatingHoverOverlay::setCornerSmoothing(int smoothing)
+{
+    smoothing = BoxAppearance::normalizeCornerSmoothing(smoothing);
+    if (m_cornerSmoothing == smoothing)
+        return;
+
+    m_cornerSmoothing = smoothing;
+    if (m_progress > 0.0)
+        update();
+}
+
+void FloatingHoverOverlay::setThemeColors(const QColor &outline, const QColor &highlight)
+{
+    const QColor nextOutline = outline.isValid() ? outline : QColor(0x1A, 0x73, 0xE8);
+    const QColor nextHighlight = highlight.isValid() ? highlight : QColor(255, 255, 255);
+    if (m_outlineColor == nextOutline && m_highlightColor == nextHighlight)
+        return;
+
+    m_outlineColor = nextOutline;
+    m_highlightColor = nextHighlight;
+    if (m_progress > 0.0)
+        update();
+}
+
 void FloatingHoverOverlay::setActive(bool active)
 {
     if (m_active == active)
@@ -125,8 +188,12 @@ void FloatingHoverOverlay::setHoverProgress(qreal progress)
     if (qFuzzyCompare(m_progress + 1.0, progress + 1.0))
         return;
 
+    const bool wasVisible = m_progress > 0.0;
     m_progress = progress;
     update();
+
+    if (wasVisible && m_progress <= 0.0 && !m_active)
+        emit fadeOutFinished();
 }
 
 int FloatingHoverOverlay::durationMs() const
@@ -200,16 +267,16 @@ void FloatingHoverOverlay::paintEvent(QPaintEvent *event)
     const qreal outerWidth = style.lineWidth;
 
     if (outerAlpha > 0) {
-        QPen pen(kGlowColor);
-        pen.setColor(QColor(kGlowColor.red(), kGlowColor.green(), kGlowColor.blue(),
-                            outerAlpha));
+        QColor outline = m_outlineColor;
+        outline.setAlpha(outerAlpha);
+        QPen pen(outline);
         pen.setWidthF(outerWidth);
         pen.setJoinStyle(Qt::RoundJoin);
         painter.setPen(pen);
 
         const QRectF outer = QRectF(rect()).adjusted(outerWidth / 2.0, outerWidth / 2.0,
                                                      -outerWidth / 2.0, -outerWidth / 2.0);
-        painter.drawRoundedRect(outer, radius, radius);
+        painter.drawPath(roundedPath(outer, radius, m_cornerSmoothing));
     }
 
     if (innerAlpha > 0) {
@@ -217,14 +284,18 @@ void FloatingHoverOverlay::paintEvent(QPaintEvent *event)
         const qreal innerWidth = qMax<qreal>(1.0, outerWidth * 0.75);
         const qreal inset = outerWidth + innerWidth / 2.0;
 
-        QPen pen(QColor(255, 255, 255, innerAlpha));
+        QColor highlight = m_highlightColor;
+        highlight.setAlpha(innerAlpha);
+        QPen pen(highlight);
         pen.setWidthF(innerWidth);
         pen.setJoinStyle(Qt::RoundJoin);
         painter.setPen(pen);
 
         const QRectF inner = QRectF(rect()).adjusted(inset, inset, -inset, -inset);
-        if (inner.isValid())
-            painter.drawRoundedRect(inner, qMax<qreal>(0.0, radius - outerWidth),
-                                    qMax<qreal>(0.0, radius - outerWidth));
+        if (inner.isValid()) {
+            painter.drawPath(roundedPath(inner,
+                                         qMax<qreal>(0.0, radius - outerWidth),
+                                         m_cornerSmoothing));
+        }
     }
 }

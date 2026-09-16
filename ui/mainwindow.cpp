@@ -7,6 +7,7 @@
 #include "trayicon.h"
 
 #include "appearancedialog.h"
+#include "settingsdialog.h"
 
 #include "appservice.h"
 #include "autostart.h"
@@ -21,12 +22,14 @@
 #include <QDialog>
 #include <QDialogButtonBox>
 #include <QFileInfo>
+#include <QFrame>
 #include <QHBoxLayout>
 #include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMessageBox>
+#include <QPalette>
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSplitter>
@@ -69,7 +72,8 @@ MainWindow::MainWindow(AppService *service,
     Q_ASSERT(m_floating);
 
     setWindowTitle(tr("DeskTidy —— 桌面收纳盒"));
-    resize(900, 600);
+    resize(980, 640);
+    setMinimumSize(760, 480);
 
     buildUi();
     connectServiceSignals();
@@ -95,6 +99,8 @@ MainWindow::MainWindow(AppService *service,
                                                 CoreNames::boxRoot())
                                   .size()));
     }
+
+    applyThemeToUi();
 }
 
 MainWindow::~MainWindow()
@@ -186,61 +192,91 @@ void MainWindow::connectServiceSignals()
 void MainWindow::buildUi()
 {
     auto *central = new QWidget(this);
-    auto *layout  = new QVBoxLayout(central);
-    layout->setContentsMargins(8, 8, 8, 4);
-    layout->setSpacing(8);
+    central->setObjectName(QStringLiteral("controlCentral"));
+    auto *layout = new QVBoxLayout(central);
+    layout->setContentsMargins(18, 18, 18, 12);
+    layout->setSpacing(14);
 
-    // ---- 顶部工具栏 ----
-    auto *topBar = new QHBoxLayout;
-    topBar->setSpacing(8);
+    // ---- 顶部：品牌信息 + 主要动作 ----
+    m_toolbarCard = new QFrame(central);
+    m_toolbarCard->setObjectName(QStringLiteral("toolbarCard"));
+    auto *toolbarLayout = new QVBoxLayout(m_toolbarCard);
+    toolbarLayout->setContentsMargins(18, 16, 18, 16);
+    toolbarLayout->setSpacing(14);
 
-    m_newBoxBtn   = new QPushButton(tr("新建收纳盒"), central);
-    m_collectBtn  = new QPushButton(tr("收纳桌面"), central);
-    m_undoBtn     = new QPushButton(tr("撤销上次收纳"), central);
-    m_settingsBtn = new QPushButton(tr("设置"), central);
+    auto *headerRow = new QHBoxLayout;
+    headerRow->setSpacing(10);
 
-    // 「收纳桌面」是主操作，视觉上给它主色，让眼睛第一眼就落在这里。
-    m_collectBtn->setStyleSheet(QStringLiteral(
-        "QPushButton { background: #1A73E8; color: white; border: none;"
-        " border-radius: 4px; padding: 6px 16px; font-weight: bold; }"
-        "QPushButton:hover { background: #1765CC; }"
-        "QPushButton:pressed { background: #14539F; }"
-        "QPushButton:disabled { background: #C6D4E6; color: #F1F3F4; }"));
+    auto *titleColumn = new QVBoxLayout;
+    titleColumn->setSpacing(2);
+    m_appTitleLabel = new QLabel(tr("DeskTidy"), m_toolbarCard);
+    m_appTitleLabel->setObjectName(QStringLiteral("appTitle"));
+    m_appSubtitleLabel = new QLabel(tr("把桌面收进盒子里，需要时再从浮窗拿出来"), m_toolbarCard);
+    m_appSubtitleLabel->setObjectName(QStringLiteral("appSubtitle"));
+    titleColumn->addWidget(m_appTitleLabel);
+    titleColumn->addWidget(m_appSubtitleLabel);
+    headerRow->addLayout(titleColumn);
+    headerRow->addStretch(1);
 
-    for (QPushButton *btn : {m_newBoxBtn, m_undoBtn, m_settingsBtn}) {
-        btn->setStyleSheet(QStringLiteral(
-            "QPushButton { padding: 6px 14px; border: 1px solid #DADCE0;"
-            " border-radius: 4px; background: #FFFFFF; }"
-            "QPushButton:hover { background: #F1F3F4; }"
-            "QPushButton:pressed { background: #E8EAED; }"
-            "QPushButton:disabled { color: #BDC1C6; background: #F8F9FA; }"));
-    }
+    m_settingsBtn = new QPushButton(tr("设置"), m_toolbarCard);
+    headerRow->addWidget(m_settingsBtn);
+    toolbarLayout->addLayout(headerRow);
 
-    topBar->addWidget(m_newBoxBtn);
-    topBar->addWidget(m_collectBtn);
-    topBar->addWidget(m_undoBtn);
-    topBar->addStretch(1);
-    topBar->addWidget(m_settingsBtn);
-    layout->addLayout(topBar);
+    auto *actionRow = new QHBoxLayout;
+    actionRow->setSpacing(9);
+    m_collectBtn = new QPushButton(tr("收纳桌面"), m_toolbarCard);
+    m_newBoxBtn  = new QPushButton(tr("新建收纳盒"), m_toolbarCard);
+    m_undoBtn    = new QPushButton(tr("撤销上次收纳"), m_toolbarCard);
+    m_collectBtn->setMinimumWidth(112);
+    actionRow->addWidget(m_collectBtn);
+    actionRow->addWidget(m_newBoxBtn);
+    actionRow->addWidget(m_undoBtn);
+    actionRow->addStretch(1);
+    toolbarLayout->addLayout(actionRow);
+
+    layout->addWidget(m_toolbarCard);
 
     connect(m_newBoxBtn,   &QPushButton::clicked, this, &MainWindow::onNewBox);
     connect(m_collectBtn,  &QPushButton::clicked, this, &MainWindow::onCollectDesktop);
     connect(m_undoBtn,     &QPushButton::clicked, this, &MainWindow::onUndoLast);
     connect(m_settingsBtn, &QPushButton::clicked, this, &MainWindow::onOpenSettings);
 
-    // ---- 左右分栏 ----
+    // ---- 左右内容卡片 ----
     m_splitter = new QSplitter(Qt::Horizontal, central);
-    m_boxList  = new BoxListWidget(m_splitter);
-    // 主窗口用默认 Options：双击 = 还原，不可拖出。行为与改造前一致。
-    m_itemList = new ItemListWidget(m_splitter);
+    m_splitter->setObjectName(QStringLiteral("contentSplitter"));
 
-    m_splitter->addWidget(m_boxList);
-    m_splitter->addWidget(m_itemList);
-    // 左栏窄、右栏宽：盒子名短，条目名长。
+    m_boxCard = new QFrame(m_splitter);
+    m_boxCard->setObjectName(QStringLiteral("contentCard"));
+    auto *boxCardLayout = new QVBoxLayout(m_boxCard);
+    boxCardLayout->setContentsMargins(14, 12, 14, 14);
+    boxCardLayout->setSpacing(8);
+    m_boxSectionTitle = new QLabel(tr("收纳盒"), m_boxCard);
+    m_boxSectionTitle->setObjectName(QStringLiteral("sectionTitle"));
+    boxCardLayout->addWidget(m_boxSectionTitle);
+    m_boxList = new BoxListWidget(m_boxCard);
+    m_boxList->setObjectName(QStringLiteral("controlBoxList"));
+    boxCardLayout->addWidget(m_boxList, 1);
+
+    m_itemCard = new QFrame(m_splitter);
+    m_itemCard->setObjectName(QStringLiteral("contentCard"));
+    auto *itemCardLayout = new QVBoxLayout(m_itemCard);
+    itemCardLayout->setContentsMargins(14, 12, 14, 14);
+    itemCardLayout->setSpacing(8);
+    m_itemSectionTitle = new QLabel(tr("盒内内容"), m_itemCard);
+    m_itemSectionTitle->setObjectName(QStringLiteral("sectionTitle"));
+    itemCardLayout->addWidget(m_itemSectionTitle);
+    // 主窗口用默认 Options：双击 = 还原，不可拖出。行为与改造前一致。
+    m_itemList = new ItemListWidget(m_itemCard);
+    m_itemList->setObjectName(QStringLiteral("controlItemList"));
+    itemCardLayout->addWidget(m_itemList, 1);
+
+    m_splitter->addWidget(m_boxCard);
+    m_splitter->addWidget(m_itemCard);
     m_splitter->setStretchFactor(0, 0);
     m_splitter->setStretchFactor(1, 1);
-    m_splitter->setSizes({260, 620});
-    m_splitter->setChildrenCollapsible(false);   // 别让主人不小心把某一栏拖没了
+    m_splitter->setSizes({280, 640});
+    m_splitter->setChildrenCollapsible(false);
+    m_splitter->setHandleWidth(10);
 
     layout->addWidget(m_splitter, 1);
     setCentralWidget(central);
@@ -281,10 +317,14 @@ void MainWindow::buildUi()
             });
 
     // 浮窗右键菜单里的「更多设置…」：打开外观对话框，并预先选中那个盒。
-    // 不自己 new 对话框、也不自己写配置 —— 与左栏右键走同一个槽，
-    // 于是两个入口的默认选中规则、读写路径、广播效果必然一致。
+    // 不自己 new 对话框、也不自己写配置，统一经过 onOpenAppearanceDialog，
+    // 读写路径与广播效果保持一致。
     connect(m_floating, &FloatingBoxManager::openAppearanceDialogRequested,
             this, &MainWindow::onOpenAppearanceDialog);
+
+    // 全局主题变了：中控窗口立即按新主题重绘。
+    connect(m_floating, &FloatingBoxManager::themeChanged,
+            this, &MainWindow::applyThemeToUi);
 
     // 外观变了：刷新左栏即可。
     // 具体"哪个盒变成什么样"由 FloatingBoxManager 直接驱动对应浮窗，
@@ -303,6 +343,115 @@ void MainWindow::buildUi()
     statusBar()->setSizeGripEnabled(true);
 }
 
+void MainWindow::applyThemeToUi()
+{
+    AppTheme theme = m_floating->theme();
+    theme.normalize();
+
+    QPalette themePalette = palette();
+    themePalette.setColor(QPalette::Window, theme.windowBackground);
+    themePalette.setColor(QPalette::WindowText, theme.text);
+    themePalette.setColor(QPalette::Base, theme.surface);
+    themePalette.setColor(QPalette::AlternateBase, theme.windowBackground);
+    themePalette.setColor(QPalette::Text, theme.text);
+    themePalette.setColor(QPalette::Button, theme.surface);
+    themePalette.setColor(QPalette::ButtonText, theme.text);
+    themePalette.setColor(QPalette::Highlight, theme.primary);
+    themePalette.setColor(QPalette::HighlightedText, theme.onPrimary);
+    themePalette.setColor(QPalette::Disabled, QPalette::Text, theme.mutedText);
+    themePalette.setColor(QPalette::Disabled, QPalette::ButtonText, theme.mutedText);
+
+    setPalette(themePalette);
+    if (QWidget *central = centralWidget()) {
+        central->setPalette(themePalette);
+        central->setAutoFillBackground(true);
+
+        central->setStyleSheet(QStringLiteral(
+            "QWidget#controlCentral { background: %1; }"
+            "QFrame#toolbarCard, QFrame#contentCard {"
+            "  background: %2; border: 1px solid %3; border-radius: 14px;"
+            "}"
+            "QLabel#appTitle { color: %4; font-size: 22px; font-weight: 700; }"
+            "QLabel#appSubtitle { color: %5; font-size: 12px; }"
+            "QLabel#sectionTitle { color: %4; font-size: 13px; font-weight: 600; padding: 2px 2px 0 2px; }"
+            "QSplitter#contentSplitter::handle { background: transparent; }"
+            "QListWidget#controlBoxList, QListWidget#controlItemList {"
+            "  border: none; background: transparent; outline: 0; padding: 2px;"
+            "}"
+            "QListWidget#controlBoxList::item, QListWidget#controlItemList::item {"
+            "  border-radius: 8px; padding: 8px 10px; margin: 2px 0;"
+            "}"
+            "QListWidget#controlBoxList::item:hover, QListWidget#controlItemList::item:hover {"
+            "  background: %6;"
+            "}"
+            "QListWidget#controlBoxList::item:selected, QListWidget#controlItemList::item:selected {"
+            "  background: %7; color: %8;"
+            "}")
+            .arg(theme.windowBackground.name(QColor::HexRgb),
+                 theme.surface.name(QColor::HexRgb),
+                 theme.border.name(QColor::HexRgb),
+                 theme.text.name(QColor::HexRgb),
+                 theme.mutedText.name(QColor::HexRgb),
+                 theme.hover.name(QColor::HexRgb),
+                 theme.primary.name(QColor::HexRgb),
+                 theme.onPrimary.name(QColor::HexRgb)));
+    }
+    if (m_splitter) {
+        m_splitter->setPalette(themePalette);
+        m_splitter->setAutoFillBackground(false);
+    }
+    if (QStatusBar *bar = statusBar()) {
+        bar->setPalette(themePalette);
+        bar->setAutoFillBackground(true);
+        bar->setStyleSheet(QStringLiteral(
+            "QStatusBar { background: %1; color: %2; border-top: 1px solid %3; }"
+            "QStatusBar::item { border: none; }")
+                .arg(theme.windowBackground.name(QColor::HexRgb),
+                     theme.mutedText.name(QColor::HexRgb),
+                     theme.border.name(QColor::HexRgb)));
+    }
+
+    const QString normalButtonStyle = QStringLiteral(
+        "QPushButton { padding: 7px 14px; border: 1px solid %1;"
+        " border-radius: 9px; background: %2; color: %3; }"
+        "QPushButton:hover { background: %4; }"
+        "QPushButton:pressed { background: %5; }"
+        "QPushButton:disabled { color: %6; background: %7; border-color: %7; }")
+        .arg(theme.border.name(QColor::HexRgb),
+             theme.surface.name(QColor::HexRgb),
+             theme.text.name(QColor::HexRgb),
+             theme.hover.name(QColor::HexRgb),
+             theme.pressed.name(QColor::HexRgb),
+             theme.mutedText.name(QColor::HexRgb),
+             theme.windowBackground.name(QColor::HexRgb));
+    const QString primaryButtonStyle = QStringLiteral(
+        "QPushButton { background: %1; color: %2; border: none;"
+        " border-radius: 10px; padding: 8px 18px; font-weight: 700; }"
+        "QPushButton:hover { background: %3; }"
+        "QPushButton:pressed { background: %4; }"
+        "QPushButton:disabled { background: %5; color: %6; }")
+        .arg(theme.primary.name(QColor::HexRgb),
+             theme.onPrimary.name(QColor::HexRgb),
+             theme.primaryHover.name(QColor::HexRgb),
+             theme.primaryPressed.name(QColor::HexRgb),
+             theme.border.name(QColor::HexRgb),
+             theme.mutedText.name(QColor::HexRgb));
+
+    for (QPushButton *button : {m_newBoxBtn, m_undoBtn, m_settingsBtn}) {
+        if (button)
+            button->setStyleSheet(normalButtonStyle);
+    }
+    if (m_collectBtn)
+        m_collectBtn->setStyleSheet(primaryButtonStyle);
+
+    setWindowOpacity(qBound(40, theme.windowOpacity, 100) / 100.0);
+
+    if (m_boxList)
+        m_boxList->setTheme(theme);
+    if (m_itemList)
+        m_itemList->setTheme(theme);
+}
+
 StorageBox MainWindow::currentBox() const
 {
     if (!m_boxList) {
@@ -315,6 +464,9 @@ void MainWindow::refreshBoxes(const QString &preferSelect)
 {
     const QList<StorageBox> boxes = BoxManager::listBoxes(CoreNames::boxRoot());
     m_boxList->setBoxes(boxes);
+    if (m_boxSectionTitle) {
+        m_boxSectionTitle->setText(tr("收纳盒  ·  %1").arg(boxes.size()));
+    }
 
     // 优先恢复指定盒（新建后 / 启动时恢复上次），否则交给 setBoxes 的保留逻辑。
     if (!preferSelect.isEmpty()) {
@@ -329,11 +481,18 @@ void MainWindow::refreshItems()
     const StorageBox box = currentBox();
     if (box.path.isEmpty()) {
         m_itemList->setItems({});
+        if (m_itemSectionTitle)
+            m_itemSectionTitle->setText(tr("盒内内容"));
         m_collectBtn->setEnabled(false);
         return;
     }
     m_collectBtn->setEnabled(true);
     m_itemList->setItems(BoxManager::listBoxItems(box.path));
+    if (m_itemSectionTitle) {
+        m_itemSectionTitle->setText(tr("%1  ·  %2 项")
+                                        .arg(box.name)
+                                        .arg(m_itemList->count()));
+    }
 }
 
 void MainWindow::updateUndoButton()
@@ -548,139 +707,14 @@ void MainWindow::onUndoLast()
 }
 
 // ---------------------------------------------------------------------------
-// 设置：只编辑"排除名称"清单
+// 设置中心：常规 / 主题与外观 / 启动与后台 / 关于
 // ---------------------------------------------------------------------------
 void MainWindow::onOpenSettings()
 {
-    QDialog dlg(this);
-    dlg.setWindowTitle(tr("设置"));
-    // 比原来的 360 高一点：新加了"启用界面动画"这一行，不留余量会把
-    // 排除清单的编辑框挤得只剩两行可见。
-    // 后来又加了"悬停自动展开"和"开机自动启动"两行，再留出余量。
-    dlg.resize(460, 480);
-
-    auto *layout = new QVBoxLayout(&dlg);
-
-    // ---- 界面动画总开关 ----
-    // 放在排除清单**之前**：它是更基础的显示偏好，
-    // 而排除清单是"这个工具具体怎么工作"的规则，前者更靠上更自然。
-    auto *anim = new QCheckBox(tr("启用界面动画"), &dlg);
-    anim->setChecked(m_service->settings()->animationsEnabled());
-    anim->setToolTip(tr("关闭后，浮窗的出现与透明度变化会立即生效，不再有过渡效果。"));
-    layout->addWidget(anim);
-
-    // ---- 悬停自动展开 ----
-    // 紧跟在动画开关之后：两者都是"浮窗怎么表现"的全局偏好，同类相邻。
-    //
-    // 与浮窗右键菜单里那一项是**同一个配置键**，两处都能改、改完都会广播 ——
-    // 这正是"两个入口"必须收在 manager 里的理由（见 setHoverExpandEnabled）。
-    auto *hover = new QCheckBox(tr("鼠标悬停时自动展开浮窗"), &dlg);
-    hover->setChecked(m_service->settings()->hoverExpandEnabled());
-    hover->setToolTip(tr("鼠标停在浮窗上约 0.25 秒后自动展开，移开后约 0.4 秒自动卷起。\n"
-                         "手动卷起过的浮窗不会被自动展开（再手动展开一次即可恢复）。"));
-    layout->addWidget(hover);
-
-    // ---- 开机自动启动 ----
-    // 与上面两项一样是全局偏好；实际读写放在 core/AutoStart 中，
-    // 主窗口只负责把勾选状态和启动方式交给它，保持"ui 只调 core"的分层。
-    const bool autoStartOn = AutoStart::isEnabled();
-    const bool autoStartSupported = AutoStart::isSupported();
-
-    auto *autostart = new QCheckBox(tr("开机自动启动 DeskTidy"), &dlg);
-    autostart->setChecked(autoStartOn);
-    autostart->setEnabled(autoStartSupported);
-    autostart->setToolTip(autoStartSupported
-                              ? tr("登录 Windows 后自动启动 DeskTidy。\n"
-                                   "该选项只对当前用户生效，可随时在此关闭。")
-                              : tr("当前平台暂不支持在 DeskTidy 中管理开机自启。"));
-    layout->addWidget(autostart);
-
-    // 启动方式单独一行，缩进在复选框下面。控制中心是否出现是启动行为，
-    // 与"要不要开机启动"是两个选择，不能混成一个勾选框。
-    auto *autoStartModeRow = new QHBoxLayout;
-    autoStartModeRow->addSpacing(24);
-    autoStartModeRow->addWidget(new QLabel(tr("自启方式："), &dlg));
-
-    auto *autoStartMode = new QComboBox(&dlg);
-    autoStartMode->addItem(tr("普通自启（显示控制中心）"));
-    autoStartMode->addItem(tr("静默自启（仅显示浮窗）"));
-    autoStartMode->setToolTip(tr("普通自启会照常打开控制中心；静默自启不显示控制中心，"
-                                 "只恢复到上次退出时开着的浮窗并驻留托盘。"));
-    autoStartModeRow->addWidget(autoStartMode, 1);
-    layout->addLayout(autoStartModeRow);
-
-    // 自启关闭时，启动方式没有意义，置灰避免误解；但上次的选择保留在
-    // 配置文件里，重新勾选后仍可沿用，不必每次重选。
-    autoStartMode->setEnabled(autoStartSupported && autostart->isChecked());
-    connect(autostart, &QCheckBox::toggled,
-            autoStartMode, [autoStartSupported, autoStartMode](bool on) {
-                autoStartMode->setEnabled(autoStartSupported && on);
-            });
-
-    // 已开启自启时以注册表里的实际命令为准（例如主人手工改过参数）；
-    // 尚未开启时沿用上次保存的偏好。
-    const bool silentAutoStart = autoStartOn
-        ? AutoStart::isSilent()
-        : m_service->settings()->autoStartSilent();
-    autoStartMode->setCurrentIndex(silentAutoStart ? 1 : 0);
-
-    layout->addSpacing(8);
-
-    auto *hint = new QLabel(tr("以下名称的桌面项永远不会被收纳（每行一个，大小写不敏感）。\n"
-                               "本工具的收纳根目录与自身快捷方式已被硬性排除，无需在此重复填写。"),
-                            &dlg);
-    hint->setWordWrap(true);
-    layout->addWidget(hint);
-
-    auto *editor = new QPlainTextEdit(&dlg);
-    editor->setPlainText(m_service->settings()->excludedNames().join(QLatin1Char('\n')));
-    editor->setPlaceholderText(tr("例如：\n重要项目\n进行中的文档"));
-    layout->addWidget(editor, 1);
-
-    auto *box = new QDialogButtonBox(QDialogButtonBox::Save | QDialogButtonBox::Cancel, &dlg);
-    box->button(QDialogButtonBox::Save)->setText(tr("保存"));
-    box->button(QDialogButtonBox::Cancel)->setText(tr("取消"));
-    layout->addWidget(box);
-
-    connect(box, &QDialogButtonBox::accepted, &dlg, &QDialog::accept);
-    connect(box, &QDialogButtonBox::rejected, &dlg, &QDialog::reject);
-
-    if (dlg.exec() != QDialog::Accepted) {
-        return;
+    SettingsDialog dlg(m_service, m_floating, this);
+    if (dlg.exec() == QDialog::Accepted) {
+        updateStatus(tr("设置已保存。"));
     }
-
-    QStringList names;
-    const QStringList lines = editor->toPlainText().split(QLatin1Char('\n'), Qt::SkipEmptyParts);
-    for (const QString &line : lines) {
-        const QString trimmed = line.trimmed();
-        if (!trimmed.isEmpty()) {
-            names << trimmed;
-        }
-    }
-    m_service->settings()->setExcludedNames(names);
-
-    // 动画开关交给 manager 写 + 广播 —— 主窗口不持有浮窗，通知不到它们。
-    m_floating->setAnimationsEnabled(anim->isChecked());
-
-    // 悬停自动展开同理，而且它与浮窗右键菜单共享同一个配置键，
-    // 两处改完都必须经过 manager 广播，否则两边勾选状态会不一致。
-    m_floating->setHoverExpandEnabled(hover->isChecked());
-
-    // 开机自启项只有在 Windows 上才可勾选。写失败时给出明确提示，
-    // 但不回滚已经保存成功的其他设置（它们是彼此独立的偏好）。
-    const bool autoStartSilent = (autoStartMode->currentIndex() == 1);
-    m_service->settings()->setAutoStartSilent(autoStartSilent);
-
-    bool autoStartSaved = true;
-    if (AutoStart::isSupported()) {
-        autoStartSaved = AutoStart::setEnabled(autostart->isChecked(), autoStartSilent);
-    }
-    if (!autoStartSaved) {
-        QMessageBox::warning(&dlg, tr("开机自启未生效"),
-                             tr("无法更新 Windows 开机启动项，请确认当前用户有权限写入注册表。"));
-    }
-
-    updateStatus(tr("设置已保存，共 %1 条排除项。").arg(names.size()));
 }
 
 // ---------------------------------------------------------------------------
@@ -718,13 +752,6 @@ void MainWindow::onBoxListContextMenu(const QPoint &pos)
             m_floating->openBox(box.name, box.path);
             updateStatus(tr("已在桌面显示「%1」的浮窗。").arg(box.name));
         }
-    });
-
-    // 外观设置。放在浮窗开关之后：先决定"要不要显示"，再决定"长什么样"，
-    // 顺序符合操作直觉；而且没开浮窗的盒也能先设好外观。
-    QAction *appearance = menu.addAction(tr("外观设置…"));
-    connect(appearance, &QAction::triggered, this, [this, box]() {
-        onOpenAppearanceDialog(box.name);
     });
 
     // 删除收纳盒。**放在菜单最底部**（Windows 惯例：破坏性操作排最后），

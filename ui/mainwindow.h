@@ -46,6 +46,7 @@ class QPushButton;
 class QCloseEvent;
 class QSplitter;
 class QLabel;
+class QFrame;
 
 class MainWindow : public QMainWindow
 {
@@ -96,8 +97,7 @@ private slots:
     void onBoxListContextMenu(const QPoint &pos);
 
     // 打开浮窗外观设置对话框。
-    // boxName 为空时用当前选中的盒 —— 两个入口（左栏右键、浮窗右键）都走这里，
-    // 保证它们的默认选中盒规则一致。
+    // 由浮窗右键信号传入盒名；为空时退到当前选中的盒。
     void onOpenAppearanceDialog(const QString &boxName = QString());
 
     // 删除收纳盒。**这是全应用唯一的破坏性操作**，流程见实现处的长注释。
@@ -105,6 +105,7 @@ private slots:
 
 private:
     void buildUi();
+    void applyThemeToUi();
     void refreshBoxes(const QString &preferSelect = QString());
     void refreshItems();
     void updateUndoButton();
@@ -147,6 +148,15 @@ private:
     BoxListWidget *m_boxList   = nullptr;
     ItemListWidget *m_itemList = nullptr;
     QSplitter     *m_splitter  = nullptr;
+
+    QFrame        *m_toolbarCard = nullptr;
+    QFrame        *m_boxCard     = nullptr;
+    QFrame        *m_itemCard    = nullptr;
+
+    QLabel        *m_appTitleLabel = nullptr;
+    QLabel        *m_appSubtitleLabel = nullptr;
+    QLabel        *m_boxSectionTitle = nullptr;
+    QLabel        *m_itemSectionTitle = nullptr;
 
     QPushButton   *m_newBoxBtn  = nullptr;
     QPushButton   *m_collectBtn = nullptr;

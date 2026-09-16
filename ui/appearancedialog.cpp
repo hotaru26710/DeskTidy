@@ -101,8 +101,11 @@ AppearanceDialog::AppearanceDialog(const QList<StorageBox> &boxes,
     setWindowTitle(tr("浮窗外观"));
     // 高度比最初的 520 高一截：多出来的「触感与动画」分组有六行控件，
     // 不放大就会把预览区挤到只剩一条缝，等于把"所见即所得"这个卖点废掉。
-    resize(500, 700);
+    resize(500, 730);
     setModal(true);
+
+    m_theme = m_floating ? m_floating->theme() : AppTheme();
+    m_theme.normalize();
 
     // 没有盒可设置时走空状态界面。放在构造里统一判断，
     // 免得每个调用点都要自己先查一遍再决定弹不弹。
@@ -175,6 +178,10 @@ void AppearanceDialog::buildUi()
         // 盒名应当长得一样，否则会怀疑是不是同一个盒。
         m_boxCombo->addItem(tr("%1  (%2)").arg(box.name).arg(box.itemCount));
     }
+    // 本对话框从浮窗右键进入，编辑对象固定为那个浮窗；盒下拉保留只为
+    // 明确显示当前对象，不再允许在这里跳到别的盒。
+    m_boxCombo->setEnabled(false);
+    m_boxCombo->setToolTip(tr("单盒外观由浮窗右键进入；若要全局修改，请用中控的「主题」。"));
     form->addRow(tr("收纳盒："), m_boxCombo);
 
     m_viewCombo = new QComboBox(this);
@@ -261,6 +268,12 @@ void AppearanceDialog::buildUi()
         m_cornerCombo->addItem(tr("%1 px").arg(px));
     touchForm->addRow(tr("圆角大小："), m_cornerCombo);
 
+    m_cornerSmoothingCombo = new QComboBox(touchBox);
+    m_cornerSmoothingCombo->addItem(tr("锐利"));
+    m_cornerSmoothingCombo->addItem(tr("标准"));
+    m_cornerSmoothingCombo->addItem(tr("更平滑"));
+    touchForm->addRow(tr("圆角平滑度："), m_cornerSmoothingCombo);
+
     root->addWidget(touchBox);
 
     m_touchHintLabel = new QLabel(
@@ -288,6 +301,7 @@ void AppearanceDialog::buildUi()
     hostLayout->setContentsMargins(0, 0, 0, 0);
 
     m_preview = new ItemListWidget(opts, m_previewHost);
+    m_preview->setTheme(m_theme);
     // 关键：预览区不接受任何鼠标交互。
     // 它内嵌的是真控件，不屏蔽的话主人能在里面选中、双击、甚至试着拖出条目，
     // 而那些信号本对话框一个都没接 —— 表现就是"点了没反应"，像是坏了。
@@ -300,6 +314,7 @@ void AppearanceDialog::buildUi()
     // 所以对话框里调出来的手感与外面看到的**不可能**不一致 ——
     // 若这里另画一套示意图，两套实现迟早分叉，而主人正是照预览做决定的。
     m_previewGlow = new FloatingHoverOverlay(m_preview);
+    m_previewGlow->setThemeColors(m_theme.primary, m_theme.onPrimary);
     m_previewGlow->setGeometry(m_preview->rect());
     m_previewGlow->raise();
 
@@ -314,12 +329,15 @@ void AppearanceDialog::buildUi()
     // ---- 按钮区 ----
     // 「应用」不关闭对话框：外观是调出来看的，调一档关一次没法连续比较。
     auto *buttons = new QDialogButtonBox(this);
+    m_followGlobalBtn = buttons->addButton(tr("恢复跟随全局主题"), QDialogButtonBox::ActionRole);
     m_resetBtn = buttons->addButton(tr("恢复默认"), QDialogButtonBox::ResetRole);
     m_applyBtn = buttons->addButton(tr("应用"), QDialogButtonBox::ApplyRole);
     buttons->addButton(tr("关闭"), QDialogButtonBox::RejectRole);
     root->addWidget(buttons);
 
     connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    connect(m_followGlobalBtn, &QPushButton::clicked,
+            this, &AppearanceDialog::onFollowGlobalTheme);
     connect(m_resetBtn, &QPushButton::clicked, this, &AppearanceDialog::onResetToDefault);
     connect(m_applyBtn, &QPushButton::clicked, this, &AppearanceDialog::onApply);
 
@@ -343,6 +361,8 @@ void AppearanceDialog::buildUi()
     connect(m_collapseDelayCombo, &QComboBox::currentIndexChanged,
             this, &AppearanceDialog::onTactileChanged);
     connect(m_cornerCombo, &QComboBox::currentIndexChanged,
+            this, &AppearanceDialog::onTactileChanged);
+    connect(m_cornerSmoothingCombo, &QComboBox::currentIndexChanged,
             this, &AppearanceDialog::onTactileChanged);
 
     // 预览用的假条目只造一次。
@@ -442,6 +462,10 @@ void AppearanceDialog::syncControlsFromAppearance()
         m_cornerCombo->setCurrentIndex(
             indexOfPreset(BoxAppearance::kCornerRadii, m_appearance.cornerRadius));
     }
+    if (m_cornerSmoothingCombo) {
+        m_cornerSmoothingCombo->setCurrentIndex(
+            indexOfPreset(BoxAppearance::kCornerSmoothings, m_appearance.cornerSmoothing));
+    }
 
     m_syncing = false;
 
@@ -496,6 +520,16 @@ void AppearanceDialog::collectAppearanceFromControls()
                               / sizeof(BoxAppearance::kCornerRadii[0])))
             m_appearance.cornerRadius = BoxAppearance::kCornerRadii[i];
     }
+    if (m_cornerSmoothingCombo) {
+        const int i = m_cornerSmoothingCombo->currentIndex();
+        if (i >= 0 && i < int(sizeof(BoxAppearance::kCornerSmoothings)
+                              / sizeof(BoxAppearance::kCornerSmoothings[0])))
+            m_appearance.cornerSmoothing = BoxAppearance::kCornerSmoothings[i];
+    }
+
+    m_appearance.cornerRadius = BoxAppearance::normalizeCornerRadius(m_appearance.cornerRadius);
+    m_appearance.cornerSmoothing = BoxAppearance::normalizeCornerSmoothing(
+        m_appearance.cornerSmoothing);
 
     // iconSize 保持 0（跟随 viewMode 推导）。
     // 本对话框不暴露"自定义像素"，所以不去动它 —— 若主人之前用别的方式
@@ -596,6 +630,24 @@ void AppearanceDialog::onApply()
     updateButtonsEnabled();
 }
 
+void AppearanceDialog::onFollowGlobalTheme()
+{
+    const StorageBox box = currentBox();
+    if (box.name.isEmpty() || !m_floating)
+        return;
+
+    // “恢复跟随”只清单盒覆盖，不删除 locked 等其它配置。
+    m_floating->clearAppearanceOverride(box.name);
+    m_appearance = m_floating->appearanceOf(box.name);
+    m_theme = m_floating->theme();
+    m_theme.normalize();
+    if (m_preview)
+        m_preview->setTheme(m_theme);
+    syncControlsFromAppearance();
+    refreshPreview();
+    updateButtonsEnabled();
+}
+
 void AppearanceDialog::onResetToDefault()
 {
     // 恢复默认 = 默认构造一份（列表 + 不透明）。
@@ -627,6 +679,7 @@ void AppearanceDialog::refreshPreview()
     // 若反过来先套外观，第一次调用时缓存还是空的，重建落空；虽然紧接着的
     // setItems 会把内容补上、最终结果正确，但白跑一趟重建。
     // 先喂条目就没有这个空转，意图也更直白：内容先有，外观后套。
+    m_preview->setTheme(m_theme);
     m_preview->setItems(m_previewEntries);
     m_preview->applyAppearance(m_appearance);
 
@@ -698,6 +751,11 @@ void AppearanceDialog::updateButtonsEnabled()
     if (m_resetBtn) {
         // 已经是默认外观时禁用：点了也没变化，留着会让人以为按钮坏了。
         m_resetBtn->setEnabled(hasBox && !m_appearance.isDefault());
+    }
+
+    if (m_followGlobalBtn) {
+        m_followGlobalBtn->setEnabled(hasBox && m_floating
+                                      && m_floating->hasAppearanceOverride(box.name));
     }
 
     if (m_applyBtn) {

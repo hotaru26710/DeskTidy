@@ -31,6 +31,7 @@
 #include <QMouseEvent>
 #include <QMoveEvent>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPropertyAnimation>
 #include <QPushButton>
 #include <QScreen>
@@ -176,28 +177,78 @@ struct ModalGuard
 
 // 统一的扁平小按钮样式。三处按钮（标题栏两个 + 操作条两个）共用一份，
 // 避免各写一遍导致悬停色不一致这种细节破绽。
-QString flatButtonStyle()
+QString flatButtonStyle(const AppTheme &theme)
 {
     return QStringLiteral(
         "QPushButton { border: none; background: transparent; padding: 2px 8px;"
-        " border-radius: 3px; color: #3C4043; }"
-        "QPushButton:hover { background: #E0E0E0; }"
-        "QPushButton:pressed { background: #D0D0D0; }"
-        "QPushButton:disabled { color: #B0B0B0; background: transparent; }");
+        " border-radius: 3px; color: %1; }"
+        "QPushButton:hover { background: %2; }"
+        "QPushButton:pressed { background: %3; }"
+        "QPushButton:disabled { color: %4; background: transparent; }")
+        .arg(theme.text.name(QColor::HexArgb), theme.hover.name(QColor::HexArgb),
+             theme.pressed.name(QColor::HexArgb), theme.mutedText.name(QColor::HexArgb));
 }
 
-// 标题栏上的图标按钮（卷起 / 关闭）更紧凑。
-QString titleBarButtonStyle(bool isClose)
+// 标题栏上的图标按钮（卷起 / 关闭）更紧凑。关闭按钮始终使用危险色，
+// 与中控里的破坏性操作保持同一套视觉语言。
+QPainterPath roundedChromePath(const QRectF &rect, qreal radius, int smoothing)
 {
+    QPainterPath path;
+    const qreal maxRadius = qMin(rect.width(), rect.height()) / 2.0;
+    radius = qMax<qreal>(0.0, qMin(radius, maxRadius));
+
+    if (radius <= 0.0) {
+        path.addRect(rect);
+        return path;
+    }
+
+    if (smoothing <= 0) {
+        path.addRoundedRect(rect, radius, radius);
+        return path;
+    }
+
+    const qreal k = smoothing == 1 ? 0.55228475 : 0.78;
+    const qreal cx = radius * k;
+    const qreal cy = radius * k;
+
+    path.moveTo(rect.left() + radius, rect.top());
+    path.lineTo(rect.right() - radius, rect.top());
+    path.cubicTo(rect.right() - radius + cx, rect.top(),
+                 rect.right(), rect.top() + radius - cy,
+                 rect.right(), rect.top() + radius);
+    path.lineTo(rect.right(), rect.bottom() - radius);
+    path.cubicTo(rect.right(), rect.bottom() - radius + cy,
+                 rect.right() - radius + cx, rect.bottom(),
+                 rect.right() - radius, rect.bottom());
+    path.lineTo(rect.left() + radius, rect.bottom());
+    path.cubicTo(rect.left() + radius - cx, rect.bottom(),
+                 rect.left(), rect.bottom() - radius + cy,
+                 rect.left(), rect.bottom() - radius);
+    path.lineTo(rect.left(), rect.top() + radius);
+    path.cubicTo(rect.left(), rect.top() + radius - cy,
+                 rect.left() + radius - cx, rect.top(),
+                 rect.left() + radius, rect.top());
+    path.closeSubpath();
+    return path;
+}
+
+QString titleBarButtonStyle(const AppTheme &theme, bool isClose)
+{
+    const QString normal = isClose ? theme.danger.name(QColor::HexArgb)
+                                   : theme.mutedText.name(QColor::HexArgb);
+    const QString hoverBg = isClose ? theme.danger.name(QColor::HexArgb)
+                                    : theme.hover.name(QColor::HexArgb);
+    const QString hoverFg = isClose ? theme.onPrimary.name(QColor::HexArgb)
+                                    : theme.text.name(QColor::HexArgb);
+    const QString pressedBg = isClose ? theme.dangerPressed.name(QColor::HexArgb)
+                                      : theme.pressed.name(QColor::HexArgb);
     return QStringLiteral(
                "QPushButton { border: none; background: transparent;"
                " padding: 0px; margin: 0px; border-radius: 3px;"
-               " color: #5F6368; font-size: 13px; }"
-               "QPushButton:hover { background: %1; color: %2; }"
-               "QPushButton:pressed { background: %3; }")
-        .arg(isClose ? QStringLiteral("#E81123") : QStringLiteral("#E0E0E0"),
-             isClose ? QStringLiteral("#FFFFFF") : QStringLiteral("#202124"),
-             isClose ? QStringLiteral("#C50F1F") : QStringLiteral("#D0D0D0"));
+               " color: %1; font-size: 13px; }"
+               "QPushButton:hover { background: %2; color: %3; }"
+               "QPushButton:pressed { background: %4; }")
+        .arg(normal, hoverBg, hoverFg, pressedBg);
 }
 
 } // namespace
@@ -231,17 +282,17 @@ FloatingBoxTitleBar::FloatingBoxTitleBar(QWidget *parent)
     layout->setSpacing(6);
 
     m_title = new QLabel(this);
-    m_title->setStyleSheet(QStringLiteral("QLabel { font-weight: bold; color: #202124; }"));
+    m_title->setStyleSheet(QStringLiteral("QLabel { font-weight: bold; color: %1; }").arg(m_theme.text.name(QColor::HexArgb)));
 
     // 数量单独一个小标签、弱化显示，形如「3 项」。
     // 之所以不拼进标题文字里：拼进去就写死了格式，日后想改成图标+数字
     // 或者加"共"字都要动字符串拼接逻辑；分开后各管各的。
     m_count = new QLabel(this);
-    m_count->setStyleSheet(QStringLiteral("QLabel { color: #80868B; font-size: 11px; }"));
+    m_count->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 11px; }").arg(m_theme.mutedText.name(QColor::HexArgb)));
 
     m_rollUpBtn = new QPushButton(QStringLiteral("—"), this);
     m_rollUpBtn->setFixedSize(22, 20);
-    m_rollUpBtn->setStyleSheet(titleBarButtonStyle(false));
+    m_rollUpBtn->setStyleSheet(titleBarButtonStyle(m_theme, false));
     m_rollUpBtn->setToolTip(tr("卷起 / 展开（也可以双击标题栏）"));
     m_rollUpBtn->setFocusPolicy(Qt::NoFocus);
 
@@ -257,13 +308,13 @@ FloatingBoxTitleBar::FloatingBoxTitleBar(QWidget *parent)
     // 阻止它被推开/被盖住，展开一次可能又被别人推走）。
     m_lockBtn = new QPushButton(QStringLiteral("🔓"), this);
     m_lockBtn->setFixedSize(22, 20);
-    m_lockBtn->setStyleSheet(titleBarButtonStyle(false));
+    m_lockBtn->setStyleSheet(titleBarButtonStyle(m_theme, false));
     m_lockBtn->setToolTip(tr("钉住：不被其他浮窗推开，并固定在最底层"));
     m_lockBtn->setFocusPolicy(Qt::NoFocus);
 
     m_closeBtn = new QPushButton(QStringLiteral("✕"), this);
     m_closeBtn->setFixedSize(22, 20);
-    m_closeBtn->setStyleSheet(titleBarButtonStyle(true));
+    m_closeBtn->setStyleSheet(titleBarButtonStyle(m_theme, true));
     m_closeBtn->setToolTip(tr("关闭这个浮窗（收纳盒与文件都不受影响）"));
     m_closeBtn->setFocusPolicy(Qt::NoFocus);
 
@@ -279,6 +330,18 @@ FloatingBoxTitleBar::FloatingBoxTitleBar(QWidget *parent)
     connect(m_closeBtn,  &QPushButton::clicked, this, &FloatingBoxTitleBar::closeClicked);
 }
 
+void FloatingBoxTitleBar::setTheme(const AppTheme &theme)
+{
+    m_theme = theme;
+    m_title->setStyleSheet(QStringLiteral("QLabel { font-weight: bold; color: %1; }")
+                               .arg(m_theme.text.name(QColor::HexArgb)));
+    m_count->setStyleSheet(QStringLiteral("QLabel { color: %1; font-size: 11px; }")
+                               .arg(m_theme.mutedText.name(QColor::HexArgb)));
+    m_rollUpBtn->setStyleSheet(titleBarButtonStyle(m_theme, false));
+    m_closeBtn->setStyleSheet(titleBarButtonStyle(m_theme, true));
+    setLockedLook(m_lockedLook);
+}
+
 void FloatingBoxTitleBar::setLockedLook(bool locked)
 {
     m_lockedLook = locked;
@@ -292,12 +355,14 @@ void FloatingBoxTitleBar::setLockedLook(bool locked)
         m_lockBtn->setStyleSheet(
             QStringLiteral("QPushButton { border: none; background: transparent;"
                            " padding: 0px; margin: 0px; border-radius: 3px;"
-                           " color: #1A73E8; font-size: 13px; }"
-                           "QPushButton:hover { background: #E0E0E0; }"));
+                           " color: %1; font-size: 13px; }"
+                           "QPushButton:hover { background: %2; }")
+                .arg(m_theme.primary.name(QColor::HexArgb),
+                     m_theme.hover.name(QColor::HexArgb)));
         m_lockBtn->setToolTip(tr("已钉住：不会被其他浮窗推开，且固定在最底层。点一下取消。"));
     } else {
         m_lockBtn->setText(QStringLiteral("🔓"));
-        m_lockBtn->setStyleSheet(titleBarButtonStyle(false));
+        m_lockBtn->setStyleSheet(titleBarButtonStyle(m_theme, false));
         m_lockBtn->setToolTip(tr("钉住：不被其他浮窗推开，并固定在最底层"));
     }
 }
@@ -715,7 +780,7 @@ void FloatingBoxWidget::buildUi()
     m_collectBtn->setToolTip(tr("把桌面上的条目收进「%1」").arg(m_boxName));
 
     m_undoBtn = new QPushButton(tr("暂无可撤销"), m_actionBar);
-    m_undoBtn->setStyleSheet(flatButtonStyle());
+    m_undoBtn->setStyleSheet(flatButtonStyle(m_theme));
 
     actionLayout->addWidget(m_collectBtn);
     actionLayout->addWidget(m_undoBtn, 1);
@@ -852,6 +917,15 @@ void FloatingBoxWidget::buildUi()
     // 鼠标穿透（见 FloatingHoverOverlay 构造函数）保证它不会吃掉列表的
     // 点击 / 悬停 / 拖拽，也不抢焦点。
     m_hoverOverlay = new FloatingHoverOverlay(this);
+    connect(m_hoverOverlay, &FloatingHoverOverlay::fadeOutFinished,
+            this, [this]() {
+                if (!m_maskRefreshPending)
+                    return;
+
+                m_maskRefreshPending = false;
+                m_maskSize = QSize();
+                updateRoundedMask();
+            });
     layoutHoverOverlay();
     syncHoverOverlay();
 }
@@ -1763,6 +1837,7 @@ void FloatingBoxWidget::syncHoverOverlay()
     m_hoverOverlay->setAnimationSpeed(m_appearance.animationSpeed);
     m_hoverOverlay->setAnimationsEnabled(m_animationsOn);
     m_hoverOverlay->setCornerRadius(m_appearance.cornerRadius);
+    m_hoverOverlay->setCornerSmoothing(m_appearance.cornerSmoothing);
 
     // 外观可能是在鼠标已经停在窗口上时改的（比如从设置对话框改完按确定）。
     // 立刻按当前状态刷新一次，主人马上就能看到新强度，不必再进出一次。
@@ -1785,44 +1860,147 @@ void FloatingBoxWidget::layoutHoverOverlay()
 
 void FloatingBoxWidget::applyCornerRadiusToUi()
 {
-    const int radius = m_appearance.cornerRadius;
+    const int radius = BoxAppearance::normalizeCornerRadius(m_appearance.cornerRadius);
+    const int smoothing = BoxAppearance::normalizeCornerSmoothing(m_appearance.cornerSmoothing);
 
-    // ---- 标题栏：顶部两个圆角 ----
-    // 底部与操作条接壤，不能圆 —— 圆了会在接缝处露出窗口底色。
     if (m_titleBar) {
         m_titleBar->setStyleSheet(QStringLiteral(
             "FloatingBoxTitleBar {"
-            "  background: #F1F3F4;"
-            "  border-bottom: 1px solid #DADCE0;"
-            "  border-top-left-radius: %1px;"
-            "  border-top-right-radius: %1px;"
-            "}").arg(radius));
+            "  background: %1;"
+            "  border-bottom: 1px solid %2;"
+            "  border-top-left-radius: %3px;"
+            "  border-top-right-radius: %3px;"
+            "}").arg(m_theme.titleBar.name(QColor::HexArgb),
+                      m_theme.border.name(QColor::HexArgb))
+                  .arg(radius));
     }
 
-    // ---- 手柄行：底部两个圆角 ----
     if (m_gripRow) {
         m_gripRow->setStyleSheet(QStringLiteral(
             "QWidget#gripRow {"
-            "  background: #FFFFFF;"
-            "  border-bottom-left-radius: %1px;"
-            "  border-bottom-right-radius: %1px;"
-            "}").arg(radius));
+            "  background: %1;"
+            "  border-bottom-left-radius: %2px;"
+            "  border-bottom-right-radius: %2px;"
+            "}").arg(m_theme.surface.name(QColor::HexArgb))
+                  .arg(radius));
     }
 
     if (m_hoverOverlay) {
         m_hoverOverlay->setCornerRadius(radius);
+        m_hoverOverlay->setCornerSmoothing(smoothing);
     }
 
     m_appliedCornerRadius = radius;
+    m_appliedCornerSmoothing = smoothing;
 
-    // ⚠️ 必须让遮罩缓存失效再重建。
-    //
-    // settleRoundedMask / ensureRoundedMaskCovers 的复用分支只看
-    // m_maskSize == size()：圆角改了但尺寸没变时它们会判定"可复用"，
-    // 于是边框样式按新半径画、窗口却仍按旧半径裁 —— 表现为
-    // "圆角调大了但四角还是原来的样子"，而且看不出是哪一步没生效。
+    // 悬停光影还在屏幕上时，不重建原生窗口遮罩。先把请求记下来，
+    // 等覆盖层完全消退后由 fadeOutFinished 补一次 setMask()。
+    if (m_hoverOverlay
+        && (m_hoverOverlay->isActive() || m_hoverOverlay->hoverProgress() > 0.0)) {
+        m_maskRefreshPending = true;
+        return;
+    }
+
+    m_maskRefreshPending = false;
     m_maskSize = QSize();
     updateRoundedMask();
+}
+
+void FloatingBoxWidget::setTheme(const AppTheme &theme)
+{
+    m_theme = theme;
+    m_theme.normalize();
+    applyThemeToUi();
+}
+
+void FloatingBoxWidget::applyThemeToUi()
+{
+    const int radius = BoxAppearance::normalizeCornerRadius(m_appearance.cornerRadius);
+    const int smoothing = BoxAppearance::normalizeCornerSmoothing(m_appearance.cornerSmoothing);
+
+    setStyleSheet(QStringLiteral(
+        "FloatingBoxWidget {"
+        "  background: %1;"
+        "  color: %2;"
+        "  border: 1px solid %3;"
+        "}").arg(m_theme.surface.name(QColor::HexArgb),
+                  m_theme.text.name(QColor::HexArgb),
+                  m_theme.border.name(QColor::HexArgb)));
+
+    if (m_titleBar) {
+        m_titleBar->setStyleSheet(QStringLiteral(
+            "FloatingBoxTitleBar {"
+            "  background: %1;"
+            "  border-bottom: 1px solid %2;"
+            "  border-top-left-radius: %3px;"
+            "  border-top-right-radius: %3px;"
+            "}").arg(m_theme.titleBar.name(QColor::HexArgb),
+                      m_theme.border.name(QColor::HexArgb))
+                  .arg(radius));
+        m_titleBar->setTheme(m_theme);
+    }
+
+    if (m_actionBar) {
+        m_actionBar->setStyleSheet(QStringLiteral(
+            "QWidget#actionBar { background: %1; }")
+                .arg(m_theme.surface.name(QColor::HexArgb)));
+    }
+
+    if (m_collectBtn) {
+        m_collectBtn->setStyleSheet(QStringLiteral(
+            "QPushButton { background: %1; color: %2; border: none;"
+            " border-radius: 3px; padding: 3px 10px; }"
+            "QPushButton:hover { background: %3; }"
+            "QPushButton:pressed { background: %4; }"
+            "QPushButton:disabled { background: %5; color: %6; }")
+                .arg(m_theme.primary.name(QColor::HexArgb),
+                     m_theme.onPrimary.name(QColor::HexArgb),
+                     m_theme.primaryHover.name(QColor::HexArgb),
+                     m_theme.primaryPressed.name(QColor::HexArgb),
+                     m_theme.hover.name(QColor::HexArgb),
+                     m_theme.mutedText.name(QColor::HexArgb)));
+    }
+
+    if (m_undoBtn)
+        m_undoBtn->setStyleSheet(flatButtonStyle(m_theme));
+
+    if (m_itemList) {
+        QPalette listPal = m_itemList->palette();
+        listPal.setColor(QPalette::Base, m_theme.surface);
+        listPal.setColor(QPalette::Window, m_theme.surface);
+        listPal.setColor(QPalette::Text, m_theme.text);
+        listPal.setColor(QPalette::WindowText, m_theme.text);
+        listPal.setColor(QPalette::Highlight, m_theme.primary);
+        listPal.setColor(QPalette::HighlightedText, m_theme.onPrimary);
+        listPal.setColor(QPalette::AlternateBase, m_theme.windowBackground);
+        listPal.setColor(QPalette::Disabled, QPalette::Text, m_theme.mutedText);
+        m_itemList->setPalette(listPal);
+        m_itemList->setAutoFillBackground(true);
+        m_itemList->setTheme(m_theme);
+    }
+
+    if (m_gripRow) {
+        m_gripRow->setStyleSheet(QStringLiteral(
+            "QWidget#gripRow {"
+            "  background: %1;"
+            "  border-bottom-left-radius: %2px;"
+            "  border-bottom-right-radius: %2px;"
+            "}").arg(m_theme.surface.name(QColor::HexArgb))
+                  .arg(radius));
+    }
+
+    if (m_sizeGrip) {
+        QPalette gripPal = m_sizeGrip->palette();
+        gripPal.setColor(QPalette::WindowText, m_theme.mutedText);
+        gripPal.setColor(QPalette::ButtonText, m_theme.mutedText);
+        m_sizeGrip->setPalette(gripPal);
+    }
+
+    if (m_hoverOverlay) {
+        m_hoverOverlay->setThemeColors(m_theme.primary, m_theme.onPrimary);
+        m_hoverOverlay->setCornerRadius(radius);
+        m_hoverOverlay->setCornerSmoothing(smoothing);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1831,8 +2009,11 @@ void FloatingBoxWidget::applyCornerRadiusToUi()
 void FloatingBoxWidget::applyAppearance(const BoxAppearance &appearance)
 {
     const int previousCornerRadius = m_appearance.cornerRadius;
+    const int previousCornerSmoothing = m_appearance.cornerSmoothing;
     m_appearance = appearance;
     const bool radiusChanged = (previousCornerRadius != m_appearance.cornerRadius);
+    const bool cornerSmoothingChanged = (previousCornerSmoothing
+                                         != m_appearance.cornerSmoothing);
 
     // ---- 悬停触感 ----
     // 覆盖层自己不读配置，四项（开关 / 强度 / 速度 / 圆角）由这里一次性下发。
@@ -1853,7 +2034,8 @@ void FloatingBoxWidget::applyAppearance(const BoxAppearance &appearance)
     // ---- 圆角 ----
     // 圆角是唯一会真正动到窗口遮罩的外观项，单独收在一处：
     // 只有它变了（或原生窗口刚重建过）才碰 setMask()，悬停期间绝不调用。
-    if (radiusChanged || m_appliedCornerRadius < 0) {
+    if (radiusChanged || cornerSmoothingChanged
+        || m_appliedCornerRadius < 0 || m_appliedCornerSmoothing < 0) {
         applyCornerRadiusToUi();
     }
 
@@ -2775,6 +2957,12 @@ void FloatingBoxWidget::applyRoundedMask(int w, int h)
         return;
     }
 
+    // 圆角改动发生在悬停期间时，所有 setMask() 都推迟到光影退场后。
+    if (m_maskRefreshPending && m_hoverOverlay
+        && (m_hoverOverlay->isActive() || m_hoverOverlay->hoverProgress() > 0.0)) {
+        return;
+    }
+
     // 用一个抗锯齿的位图 mask，而不是直接 Region。
     // 直接 QRegion 是硬边、四角会有明显锯齿；8px 半径下用位图画能磨平。
     QBitmap mask(w, h);
@@ -2783,14 +2971,14 @@ void FloatingBoxWidget::applyRoundedMask(int w, int h)
     QPainter painter(&mask);
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    painter.setBrush(Qt::color1);   // 再用"不透明"刷出圆角矩形
-    painter.setPen(Qt::NoPen);
 
     // 内缩半像素：抗锯齿的边界会落在半个像素上，不内缩的话最外一圈
-    // 会被削掉一像素，圆角看着比 8px 小一点。
+    // 会被削掉一像素，圆角看着比设定值小一点。
     const qreal radius = qMax(0, m_appearance.cornerRadius);
-    painter.drawRoundedRect(QRectF(0, 0, w, h).adjusted(0.5, 0.5, -0.5, -0.5),
-                            radius, radius);
+    const int smoothing = BoxAppearance::normalizeCornerSmoothing(
+        m_appearance.cornerSmoothing);
+    const QRectF maskRect = QRectF(0, 0, w, h).adjusted(0.5, 0.5, -0.5, -0.5);
+    painter.fillPath(roundedChromePath(maskRect, radius, smoothing), Qt::color1);
     painter.end();
 
     m_maskBitmap = mask;

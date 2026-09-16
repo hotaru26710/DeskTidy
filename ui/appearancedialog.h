@@ -69,6 +69,7 @@ private slots:
     void onTactileChanged();
     void onApply();
     void onResetToDefault();
+    void onFollowGlobalTheme();
 
 private:
     void buildUi();
@@ -122,6 +123,7 @@ private:
     QComboBox      *m_expandDelayCombo  = nullptr;
     QComboBox      *m_collapseDelayCombo = nullptr;
     QComboBox      *m_cornerCombo       = nullptr;
+    QComboBox      *m_cornerSmoothingCombo = nullptr;
     QLabel         *m_touchHintLabel    = nullptr;
 
     // 预览区的光影覆盖层（不参与布局），以及它挂靠的那个容器。
@@ -129,8 +131,11 @@ private:
     FloatingHoverOverlay *m_previewGlow = nullptr;
     QWidget              *m_previewHost = nullptr;
 
+    QPushButton    *m_followGlobalBtn = nullptr;
     QPushButton    *m_resetBtn = nullptr;
     QPushButton    *m_applyBtn = nullptr;
+
+    AppTheme m_theme;
 
     // 防止"程序化改控件值"反过来触发 onXxxChanged 造成重复刷新或死循环。
     bool m_syncing = false;

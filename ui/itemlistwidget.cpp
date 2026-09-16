@@ -180,6 +180,39 @@ void ItemListWidget::applyAppearance(const BoxAppearance &appearance)
     applyViewMode();
 }
 
+void ItemListWidget::setTheme(const AppTheme &theme)
+{
+    m_theme = theme;
+    m_theme.normalize();
+
+    QPalette pal = palette();
+    pal.setColor(QPalette::Base, m_theme.surface);
+    pal.setColor(QPalette::Window, m_theme.surface);
+    pal.setColor(QPalette::Text, m_theme.text);
+    pal.setColor(QPalette::WindowText, m_theme.text);
+    pal.setColor(QPalette::Highlight, m_theme.primary);
+    pal.setColor(QPalette::HighlightedText, m_theme.onPrimary);
+    pal.setColor(QPalette::AlternateBase, m_theme.windowBackground);
+    pal.setColor(QPalette::Disabled, QPalette::Text, m_theme.mutedText);
+    setPalette(pal);
+
+    for (int row = 0; row < count(); ++row) {
+        QListWidgetItem *item = this->item(row);
+        if (!item)
+            continue;
+        const bool isDir = item->data(Qt::UserRole + 1).toBool();
+        item->setForeground(QBrush(isDir ? m_theme.primary : m_theme.text));
+    }
+
+    if (m_dragActive) {
+        m_dragActive = false;
+        setStyleSheet(m_baseStyleSheet);   // 先回到真正的基础样式，再按新主题重画高亮
+        setDragHighlight(true);
+    } else {
+        setStyleSheet(m_baseStyleSheet);
+    }
+}
+
 void ItemListWidget::applyViewMode()
 {
     const bool iconMode = m_options.viewMode != BoxAppearance::ViewMode::List;
@@ -300,6 +333,7 @@ void ItemListWidget::setItems(const QList<DesktopEntry> &items)
         auto *item = new QListWidgetItem(
             itemDisplayName(entry, m_options.hideExtensions), this);
         item->setData(Qt::UserRole, entry.filePath);
+        item->setData(Qt::UserRole + 1, entry.isDir);
 
         // 大小与时间放进 tooltip：列表本身保持干净，信息按需可见。
         const QString sizeText = entry.isDir
@@ -385,9 +419,7 @@ void ItemListWidget::setItems(const QList<DesktopEntry> &items)
                                             BoxAppearance::ViewMode::List);
         item->setIcon(QIcon(icon.pixmap(copyPx, copyPx)));
 
-        if (entry.isDir) {
-            item->setForeground(QBrush(QColor(QStringLiteral("#1A73E8"))));  // 文件夹与文件区分开
-        }
+        item->setForeground(QBrush(entry.isDir ? m_theme.primary : m_theme.text));
     }
 }
 
@@ -539,8 +571,18 @@ void ItemListWidget::setDragHighlight(bool on)
     m_dragActive = on;
 
     // 用样式表切换边框与底色做反馈：够醒目，且不需要额外控件。
-    setStyleSheet(on
-                      ? QStringLiteral("QListWidget { border: 2px dashed #1A73E8;"
-                                       " background: #E8F0FE; }")
-                      : QString());
+    if (on) {
+        m_baseStyleSheet = styleSheet();
+        QColor highlightBg = m_theme.primary;
+        highlightBg.setAlpha(36);
+        setStyleSheet(QStringLiteral("QListWidget { border: 2px dashed %1;"
+                                     " background: rgba(%2,%3,%4,%5); }")
+                          .arg(m_theme.primary.name(QColor::HexArgb))
+                          .arg(highlightBg.red())
+                          .arg(highlightBg.green())
+                          .arg(highlightBg.blue())
+                          .arg(highlightBg.alpha()));
+    } else {
+        setStyleSheet(m_baseStyleSheet);
+    }
 }

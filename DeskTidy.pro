@@ -28,7 +28,9 @@ SOURCES += \
     ui/floatinghoveroverlay.cpp \
     ui/floatingboxmanager.cpp \
     ui/trayicon.cpp \
-    ui/appearancedialog.cpp
+    ui/appearancedialog.cpp \
+    ui/themedialog.cpp \
+    ui/settingsdialog.cpp
 
 HEADERS += \
     core/coretypes.h \
@@ -51,7 +53,9 @@ HEADERS += \
     ui/floatinghoveroverlay.h \
     ui/floatingboxmanager.h \
     ui/trayicon.h \
-    ui/appearancedialog.h
+    ui/appearancedialog.h \
+    ui/themedialog.h \
+    ui/settingsdialog.h
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin

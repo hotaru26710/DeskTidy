@@ -1,5 +1,4 @@
 QT += core testlib widgets
-QT -= gui
 
 CONFIG += c++17 console
 CONFIG -= app_bundle
@@ -46,7 +45,8 @@ SOURCES += \
     ../ui/previewdialog.cpp \
     ../ui/floatingboxwidget.cpp \
     ../ui/floatinghoveroverlay.cpp \
-    ../ui/floatingboxmanager.cpp
+    ../ui/floatingboxmanager.cpp \
+    ../ui/themedialog.cpp
 
 HEADERS += \
     ../core/coretypes.h \
@@ -64,4 +64,5 @@ HEADERS += \
     ../ui/previewdialog.h \
     ../ui/floatingboxwidget.h \
     ../ui/floatinghoveroverlay.h \
-    ../ui/floatingboxmanager.h
+    ../ui/floatingboxmanager.h \
+    ../ui/themedialog.h

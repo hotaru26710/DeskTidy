@@ -50,7 +50,8 @@ bool BoxAppearance::isDefault() const
            && animationSpeed == AnimationSpeed::Standard
            && hoverExpandDelayMs == 250
            && hoverCollapseDelayMs == 400
-           && cornerRadius == 8;
+           && cornerRadius == 8
+           && cornerSmoothing == 1;
 }
 
 namespace {
@@ -113,4 +114,76 @@ int BoxAppearance::normalizeHoverCollapseDelayMs(int raw)
 int BoxAppearance::normalizeCornerRadius(int raw)
 {
     return nearestPreset(kCornerRadii, 4, raw);
+}
+
+int BoxAppearance::normalizeCornerSmoothing(int raw)
+{
+    return nearestPreset(kCornerSmoothings, 3, raw);
+}
+
+bool AppTheme::isDefault() const
+{
+    const AppTheme d;
+    return windowBackground == d.windowBackground
+           && surface == d.surface
+           && titleBar == d.titleBar
+           && text == d.text
+           && mutedText == d.mutedText
+           && border == d.border
+           && hover == d.hover
+           && pressed == d.pressed
+           && primary == d.primary
+           && primaryHover == d.primaryHover
+           && primaryPressed == d.primaryPressed
+           && onPrimary == d.onPrimary
+           && danger == d.danger
+           && dangerPressed == d.dangerPressed
+           && windowOpacity == d.windowOpacity
+           && floatDefaults.viewMode == d.floatDefaults.viewMode
+           && floatDefaults.iconSize == d.floatDefaults.iconSize
+           && floatDefaults.opacity == d.floatDefaults.opacity
+           && floatDefaults.hoverEffect == d.floatDefaults.hoverEffect
+           && floatDefaults.feedbackStrength == d.floatDefaults.feedbackStrength
+           && floatDefaults.animationSpeed == d.floatDefaults.animationSpeed
+           && floatDefaults.hoverExpandDelayMs == d.floatDefaults.hoverExpandDelayMs
+           && floatDefaults.hoverCollapseDelayMs == d.floatDefaults.hoverCollapseDelayMs
+           && floatDefaults.cornerRadius == d.floatDefaults.cornerRadius
+           && floatDefaults.cornerSmoothing == d.floatDefaults.cornerSmoothing;
+}
+
+void AppTheme::normalize()
+{
+    const AppTheme d;
+    const auto normalizedColor = [](const QColor &color, const QColor &fallback) {
+        return color.isValid() ? color : fallback;
+    };
+
+    windowBackground = normalizedColor(windowBackground, d.windowBackground);
+    surface          = normalizedColor(surface, d.surface);
+    titleBar         = normalizedColor(titleBar, d.titleBar);
+    text             = normalizedColor(text, d.text);
+    mutedText        = normalizedColor(mutedText, d.mutedText);
+    border           = normalizedColor(border, d.border);
+    hover            = normalizedColor(hover, d.hover);
+    pressed          = normalizedColor(pressed, d.pressed);
+    primary          = normalizedColor(primary, d.primary);
+    primaryHover     = normalizedColor(primaryHover, d.primaryHover);
+    primaryPressed   = normalizedColor(primaryPressed, d.primaryPressed);
+    onPrimary        = normalizedColor(onPrimary, d.onPrimary);
+    danger           = normalizedColor(danger, d.danger);
+    dangerPressed    = normalizedColor(dangerPressed, d.dangerPressed);
+    windowOpacity    = std::max(40, std::min(windowOpacity, 100));
+
+    BoxAppearance &a = floatDefaults;
+    a.viewMode = static_cast<BoxAppearance::ViewMode>(
+        std::max(0, std::min(static_cast<int>(a.viewMode), 3)));
+    a.iconSize = std::max(0, std::min(a.iconSize, 512));
+    a.opacity = std::max(BoxAppearance::kMinOpacity, std::min(a.opacity, 100));
+    a.hoverEffect = BoxAppearance::normalizeHoverEffect(static_cast<int>(a.hoverEffect));
+    a.feedbackStrength = BoxAppearance::normalizeFeedbackStrength(static_cast<int>(a.feedbackStrength));
+    a.animationSpeed = BoxAppearance::normalizeAnimationSpeed(static_cast<int>(a.animationSpeed));
+    a.hoverExpandDelayMs = BoxAppearance::normalizeHoverExpandDelayMs(a.hoverExpandDelayMs);
+    a.hoverCollapseDelayMs = BoxAppearance::normalizeHoverCollapseDelayMs(a.hoverCollapseDelayMs);
+    a.cornerRadius = BoxAppearance::normalizeCornerRadius(a.cornerRadius);
+    a.cornerSmoothing = BoxAppearance::normalizeCornerSmoothing(a.cornerSmoothing);
 }

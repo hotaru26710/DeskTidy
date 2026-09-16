@@ -1,5 +1,7 @@
 #include "settings.h"
 
+#include <algorithm>
+
 #include <QDir>
 #include <QSettings>
 #include <QStandardPaths>
@@ -63,6 +65,38 @@ const QString kKeyFloatHoverCollapseDelayFmt =
     QStringLiteral("floating/hoverCollapseDelay/%1");
 const QString kKeyFloatCornerRadiusFmt =
     QStringLiteral("floating/cornerRadius/%1");
+const QString kKeyFloatCornerSmoothingFmt =
+    QStringLiteral("floating/cornerSmoothing/%1");
+const QString kKeyFloatCustomAppearanceFmt =
+    QStringLiteral("floating/customAppearance/%1");
+
+// 全局主题。颜色、窗口透明度和浮窗默认外观都放在 theme/ 下，便于一眼看出它们不是每盒配置。
+const QString kKeyThemeWindowBg      = QStringLiteral("theme/windowBackground");
+const QString kKeyThemeSurface       = QStringLiteral("theme/surface");
+const QString kKeyThemeTitleBar      = QStringLiteral("theme/titleBar");
+const QString kKeyThemeText          = QStringLiteral("theme/text");
+const QString kKeyThemeMutedText     = QStringLiteral("theme/mutedText");
+const QString kKeyThemeBorder        = QStringLiteral("theme/border");
+const QString kKeyThemeHover         = QStringLiteral("theme/hover");
+const QString kKeyThemePressed       = QStringLiteral("theme/pressed");
+const QString kKeyThemePrimary       = QStringLiteral("theme/primary");
+const QString kKeyThemePrimaryHover  = QStringLiteral("theme/primaryHover");
+const QString kKeyThemePrimaryPress  = QStringLiteral("theme/primaryPressed");
+const QString kKeyThemeOnPrimary     = QStringLiteral("theme/onPrimary");
+const QString kKeyThemeDanger        = QStringLiteral("theme/danger");
+const QString kKeyThemeDangerPress   = QStringLiteral("theme/dangerPressed");
+const QString kKeyThemeWindowOpacity = QStringLiteral("theme/windowOpacity");
+
+const QString kKeyThemeFloatViewModeFmt = QStringLiteral("theme/float/viewMode");
+const QString kKeyThemeFloatIconSizeFmt = QStringLiteral("theme/float/iconSize");
+const QString kKeyThemeFloatOpacityFmt = QStringLiteral("theme/float/opacity");
+const QString kKeyThemeFloatHoverEffectFmt = QStringLiteral("theme/float/hoverEffect");
+const QString kKeyThemeFloatHoverStrengthFmt = QStringLiteral("theme/float/hoverStrength");
+const QString kKeyThemeFloatAnimationSpeedFmt = QStringLiteral("theme/float/animationSpeed");
+const QString kKeyThemeFloatHoverExpandDelayFmt = QStringLiteral("theme/float/hoverExpandDelay");
+const QString kKeyThemeFloatHoverCollapseDelayFmt = QStringLiteral("theme/float/hoverCollapseDelay");
+const QString kKeyThemeFloatCornerRadiusFmt = QStringLiteral("theme/float/cornerRadius");
+const QString kKeyThemeFloatCornerSmoothingFmt = QStringLiteral("theme/float/cornerSmoothing");
 
 // 把盒名编码成可安全嵌入 QSettings 键名的形式。
 //
@@ -322,6 +356,8 @@ BoxAppearance Settings::floatAppearance(const QString &boxName) const
         ini.value(kKeyFloatHoverCollapseDelayFmt.arg(encoded), 400).toInt());
     result.cornerRadius = BoxAppearance::normalizeCornerRadius(
         ini.value(kKeyFloatCornerRadiusFmt.arg(encoded), 8).toInt());
+    result.cornerSmoothing = BoxAppearance::normalizeCornerSmoothing(
+        ini.value(kKeyFloatCornerSmoothingFmt.arg(encoded), 1).toInt());
 
     return result;
 }
@@ -401,6 +437,36 @@ void Settings::setFloatAppearance(const QString &boxName, const BoxAppearance &a
                  BoxAppearance::normalizeCornerRadius(appearance.cornerRadius),
                  8);
 
+    const QString smoothingKey = kKeyFloatCornerSmoothingFmt.arg(encoded);
+    writeEnumKey(smoothingKey,
+                 BoxAppearance::normalizeCornerSmoothing(appearance.cornerSmoothing),
+                 1);
+
+    // 只要主人从浮窗右键点过「应用」，这个盒就拥有一份完整覆盖。
+    // 即使这份覆盖恰好等于内置默认值，也不能被全局主题继续带着走。
+    ini.setValue(kKeyFloatCustomAppearanceFmt.arg(encoded), true);
+    ini.sync();
+}
+
+void Settings::clearFloatAppearanceOverride(const QString &boxName)
+{
+    if (m_iniPath.isEmpty() || boxName.isEmpty())
+        return;
+
+    QSettings ini(m_iniPath, QSettings::IniFormat);
+    const QString encoded = encodeBoxName(boxName);
+
+    ini.remove(kKeyFloatViewModeFmt.arg(encoded));
+    ini.remove(kKeyFloatIconSizeFmt.arg(encoded));
+    ini.remove(kKeyFloatOpacityFmt.arg(encoded));
+    ini.remove(kKeyFloatHoverEffectFmt.arg(encoded));
+    ini.remove(kKeyFloatHoverStrengthFmt.arg(encoded));
+    ini.remove(kKeyFloatAnimationSpeedFmt.arg(encoded));
+    ini.remove(kKeyFloatHoverExpandDelayFmt.arg(encoded));
+    ini.remove(kKeyFloatHoverCollapseDelayFmt.arg(encoded));
+    ini.remove(kKeyFloatCornerRadiusFmt.arg(encoded));
+    ini.remove(kKeyFloatCornerSmoothingFmt.arg(encoded));
+    ini.remove(kKeyFloatCustomAppearanceFmt.arg(encoded));
     ini.sync();
 }
 
@@ -409,23 +475,161 @@ void Settings::clearFloatAppearance(const QString &boxName)
     if (m_iniPath.isEmpty() || boxName.isEmpty())
         return;
 
+    // 只在这里清掉仅属于“删除盒”的钉住状态；恢复跟随全局必须走
+    // clearFloatAppearanceOverride()，不能误删主人的位置约束。
+    clearFloatAppearanceOverride(boxName);
+
+    QSettings ini(m_iniPath, QSettings::IniFormat);
+    ini.remove(kKeyFloatLockedFmt.arg(encodeBoxName(boxName)));
+    ini.sync();
+}
+
+bool Settings::hasFloatAppearanceOverride(const QString &boxName) const
+{
+    if (m_iniPath.isEmpty() || boxName.isEmpty())
+        return false;
+
     QSettings ini(m_iniPath, QSettings::IniFormat);
     const QString encoded = encodeBoxName(boxName);
+    return ini.value(kKeyFloatCustomAppearanceFmt.arg(encoded), false).toBool()
+           || ini.contains(kKeyFloatViewModeFmt.arg(encoded))
+           || ini.contains(kKeyFloatIconSizeFmt.arg(encoded))
+           || ini.contains(kKeyFloatOpacityFmt.arg(encoded))
+           || ini.contains(kKeyFloatHoverEffectFmt.arg(encoded))
+           || ini.contains(kKeyFloatHoverStrengthFmt.arg(encoded))
+           || ini.contains(kKeyFloatAnimationSpeedFmt.arg(encoded))
+           || ini.contains(kKeyFloatHoverExpandDelayFmt.arg(encoded))
+           || ini.contains(kKeyFloatHoverCollapseDelayFmt.arg(encoded))
+           || ini.contains(kKeyFloatCornerRadiusFmt.arg(encoded))
+           || ini.contains(kKeyFloatCornerSmoothingFmt.arg(encoded));
+}
 
-    // 删盒时调用：三项一起清掉，不留孤儿键。
-    // 不清的话，将来主人建一个同名盒会"继承"上一个盒的外观，够他困惑一会儿。
-    ini.remove(kKeyFloatViewModeFmt.arg(encoded));
-    ini.remove(kKeyFloatIconSizeFmt.arg(encoded));
-    ini.remove(kKeyFloatOpacityFmt.arg(encoded));
-    // 触感与动画六项同样是"每盒一份"，一并清掉。
-    ini.remove(kKeyFloatHoverEffectFmt.arg(encoded));
-    ini.remove(kKeyFloatHoverStrengthFmt.arg(encoded));
-    ini.remove(kKeyFloatAnimationSpeedFmt.arg(encoded));
-    ini.remove(kKeyFloatHoverExpandDelayFmt.arg(encoded));
-    ini.remove(kKeyFloatHoverCollapseDelayFmt.arg(encoded));
-    ini.remove(kKeyFloatCornerRadiusFmt.arg(encoded));
-    // 钉住状态同样是"每盒一份"，一并清掉。
-    ini.remove(kKeyFloatLockedFmt.arg(encoded));
+// ---------------------------------------------------------------------------
+// 全局主题
+// ---------------------------------------------------------------------------
+AppTheme Settings::appTheme() const
+{
+    AppTheme result;
+    if (m_iniPath.isEmpty())
+        return result;
+
+    QSettings ini(m_iniPath, QSettings::IniFormat);
+
+    const auto readColor = [&ini](const QString &key, const QColor &fallback) {
+        const QString raw = ini.value(key, fallback.name(QColor::HexArgb)).toString();
+        const QColor color = QColor::fromString(raw);
+        return color.isValid() ? color : fallback;
+    };
+
+    result.windowBackground = readColor(kKeyThemeWindowBg, result.windowBackground);
+    result.surface          = readColor(kKeyThemeSurface, result.surface);
+    result.titleBar         = readColor(kKeyThemeTitleBar, result.titleBar);
+    result.text             = readColor(kKeyThemeText, result.text);
+    result.mutedText        = readColor(kKeyThemeMutedText, result.mutedText);
+    result.border           = readColor(kKeyThemeBorder, result.border);
+    result.hover            = readColor(kKeyThemeHover, result.hover);
+    result.pressed          = readColor(kKeyThemePressed, result.pressed);
+    result.primary          = readColor(kKeyThemePrimary, result.primary);
+    result.primaryHover     = readColor(kKeyThemePrimaryHover, result.primaryHover);
+    result.primaryPressed   = readColor(kKeyThemePrimaryPress, result.primaryPressed);
+    result.onPrimary        = readColor(kKeyThemeOnPrimary, result.onPrimary);
+    result.danger           = readColor(kKeyThemeDanger, result.danger);
+    result.dangerPressed    = readColor(kKeyThemeDangerPress, result.dangerPressed);
+    result.windowOpacity = std::max(
+        40, std::min(ini.value(kKeyThemeWindowOpacity, result.windowOpacity).toInt(), 100));
+
+    BoxAppearance &a = result.floatDefaults;
+    a.viewMode = static_cast<BoxAppearance::ViewMode>(
+        std::max(0, std::min(ini.value(kKeyThemeFloatViewModeFmt,
+                                       static_cast<int>(a.viewMode)).toInt(), 3)));
+    a.iconSize = std::max(0, std::min(ini.value(kKeyThemeFloatIconSizeFmt, a.iconSize).toInt(), 512));
+    a.opacity = std::max(BoxAppearance::kMinOpacity,
+                         std::min(ini.value(kKeyThemeFloatOpacityFmt, a.opacity).toInt(), 100));
+    a.hoverEffect = BoxAppearance::normalizeHoverEffect(
+        ini.value(kKeyThemeFloatHoverEffectFmt,
+                  static_cast<int>(a.hoverEffect)).toInt());
+    a.feedbackStrength = BoxAppearance::normalizeFeedbackStrength(
+        ini.value(kKeyThemeFloatHoverStrengthFmt,
+                  static_cast<int>(a.feedbackStrength)).toInt());
+    a.animationSpeed = BoxAppearance::normalizeAnimationSpeed(
+        ini.value(kKeyThemeFloatAnimationSpeedFmt,
+                  static_cast<int>(a.animationSpeed)).toInt());
+    a.hoverExpandDelayMs = BoxAppearance::normalizeHoverExpandDelayMs(
+        ini.value(kKeyThemeFloatHoverExpandDelayFmt, a.hoverExpandDelayMs).toInt());
+    a.hoverCollapseDelayMs = BoxAppearance::normalizeHoverCollapseDelayMs(
+        ini.value(kKeyThemeFloatHoverCollapseDelayFmt, a.hoverCollapseDelayMs).toInt());
+    a.cornerRadius = BoxAppearance::normalizeCornerRadius(
+        ini.value(kKeyThemeFloatCornerRadiusFmt, a.cornerRadius).toInt());
+    a.cornerSmoothing = BoxAppearance::normalizeCornerSmoothing(
+        ini.value(kKeyThemeFloatCornerSmoothingFmt, a.cornerSmoothing).toInt());
+
+    result.normalize();
+    return result;
+}
+
+void Settings::setAppTheme(const AppTheme &theme)
+{
+    if (m_iniPath.isEmpty())
+        return;
+
+    AppTheme value = theme;
+    value.normalize();
+    const AppTheme d;
+
+    QSettings ini(m_iniPath, QSettings::IniFormat);
+    const auto writeColor = [&ini](const QString &key, const QColor &color, const QColor &fallback) {
+        if (color == fallback)
+            ini.remove(key);
+        else
+            ini.setValue(key, color.name(QColor::HexArgb));
+    };
+
+    writeColor(kKeyThemeWindowBg, value.windowBackground, d.windowBackground);
+    writeColor(kKeyThemeSurface, value.surface, d.surface);
+    writeColor(kKeyThemeTitleBar, value.titleBar, d.titleBar);
+    writeColor(kKeyThemeText, value.text, d.text);
+    writeColor(kKeyThemeMutedText, value.mutedText, d.mutedText);
+    writeColor(kKeyThemeBorder, value.border, d.border);
+    writeColor(kKeyThemeHover, value.hover, d.hover);
+    writeColor(kKeyThemePressed, value.pressed, d.pressed);
+    writeColor(kKeyThemePrimary, value.primary, d.primary);
+    writeColor(kKeyThemePrimaryHover, value.primaryHover, d.primaryHover);
+    writeColor(kKeyThemePrimaryPress, value.primaryPressed, d.primaryPressed);
+    writeColor(kKeyThemeOnPrimary, value.onPrimary, d.onPrimary);
+    writeColor(kKeyThemeDanger, value.danger, d.danger);
+    writeColor(kKeyThemeDangerPress, value.dangerPressed, d.dangerPressed);
+
+    if (value.windowOpacity == d.windowOpacity)
+        ini.remove(kKeyThemeWindowOpacity);
+    else
+        ini.setValue(kKeyThemeWindowOpacity, value.windowOpacity);
+
+    const BoxAppearance &a = value.floatDefaults;
+    const BoxAppearance &fd = d.floatDefaults;
+    const auto writeInt = [&ini](const QString &key, int current, int fallback) {
+        if (current == fallback)
+            ini.remove(key);
+        else
+            ini.setValue(key, current);
+    };
+
+    writeInt(kKeyThemeFloatViewModeFmt, static_cast<int>(a.viewMode),
+             static_cast<int>(fd.viewMode));
+    writeInt(kKeyThemeFloatIconSizeFmt, a.iconSize, fd.iconSize);
+    writeInt(kKeyThemeFloatOpacityFmt, a.opacity, fd.opacity);
+    writeInt(kKeyThemeFloatHoverEffectFmt, static_cast<int>(a.hoverEffect),
+             static_cast<int>(fd.hoverEffect));
+    writeInt(kKeyThemeFloatHoverStrengthFmt, static_cast<int>(a.feedbackStrength),
+             static_cast<int>(fd.feedbackStrength));
+    writeInt(kKeyThemeFloatAnimationSpeedFmt, static_cast<int>(a.animationSpeed),
+             static_cast<int>(fd.animationSpeed));
+    writeInt(kKeyThemeFloatHoverExpandDelayFmt, a.hoverExpandDelayMs,
+             fd.hoverExpandDelayMs);
+    writeInt(kKeyThemeFloatHoverCollapseDelayFmt, a.hoverCollapseDelayMs,
+             fd.hoverCollapseDelayMs);
+    writeInt(kKeyThemeFloatCornerRadiusFmt, a.cornerRadius, fd.cornerRadius);
+    writeInt(kKeyThemeFloatCornerSmoothingFmt, a.cornerSmoothing, fd.cornerSmoothing);
+
     ini.sync();
 }
 

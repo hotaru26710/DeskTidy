@@ -146,14 +146,15 @@ void FloatingBoxManager::openBox(const QString &boxName, const QString &boxPath)
     }
 
     auto *widget = new FloatingBoxWidget(m_service, boxName, boxPath);
+    widget->setTheme(theme());
 
     // 恢复上次几何；没存过则用默认位置。
     widget->applySavedGeometry(m_service->settings()->floatGeometry(boxName));
 
-    // 应用外观。放在 applySavedGeometry **之后**：
+    // 应用最终生效外观。放在 applySavedGeometry **之后**：
     // 几何恢复会把窗口尺寸还原成上次的大小，而外观（尤其图标模式）
     // 可能要求更大的尺寸 —— 顺序反了会被几何恢复覆盖掉。
-    widget->applyAppearance(m_service->settings()->floatAppearance(boxName));
+    widget->applyAppearance(effectiveAppearanceOf(boxName));
 
     connect(widget, &FloatingBoxWidget::closeRequested,
             this, &FloatingBoxManager::closeBox);
@@ -202,8 +203,7 @@ void FloatingBoxManager::openBox(const QString &boxName, const QString &boxPath)
                 if (changedBox != widget->boxName()) {
                     return;
                 }
-                widget->applyAppearance(
-                    m_service->settings()->floatAppearance(changedBox));
+                widget->applyAppearance(effectiveAppearanceOf(changedBox));
             });
 
     m_widgets.insert(boxName, widget);
@@ -310,12 +310,56 @@ void FloatingBoxManager::applyAppearance(const QString &boxName,
     emit boxAppearanceChanged(boxName);
 }
 
+BoxAppearance FloatingBoxManager::effectiveAppearanceOf(const QString &boxName) const
+{
+    // 单盒覆盖优先；没有覆盖时才使用全局主题的浮窗默认外观。
+    // 两个来源都已在 Settings / AppTheme 中归一化，这里不再另写一套默认值。
+    if (m_service->settings()->hasFloatAppearanceOverride(boxName)) {
+        return m_service->settings()->floatAppearance(boxName);
+    }
+    return theme().floatDefaults;
+}
+
 BoxAppearance FloatingBoxManager::appearanceOf(const QString &boxName) const
 {
-    // 直接转发给 Settings：那里已经处理了"没配置过就返回默认值"
-    // 与"值越界就夹到合法范围"两件事。在这里再兜一层只会让
-    // 两处的默认值定义有机会漂移。
-    return m_service->settings()->floatAppearance(boxName);
+    return effectiveAppearanceOf(boxName);
+}
+
+bool FloatingBoxManager::hasAppearanceOverride(const QString &boxName) const
+{
+    return m_service->settings()->hasFloatAppearanceOverride(boxName);
+}
+
+void FloatingBoxManager::clearAppearanceOverride(const QString &boxName)
+{
+    if (boxName.isEmpty())
+        return;
+
+    m_service->settings()->clearFloatAppearanceOverride(boxName);
+    emit boxAppearanceChanged(boxName);
+}
+
+AppTheme FloatingBoxManager::theme() const
+{
+    return m_service->settings()->appTheme();
+}
+
+void FloatingBoxManager::setTheme(const AppTheme &newTheme)
+{
+    m_service->settings()->setAppTheme(newTheme);
+    const AppTheme applied = theme();
+
+    // 中控窗口自己先刷新，再逐个通知浮窗。已有单盒覆盖的浮窗必须保持
+    // 原样，只把新的中控颜色传进去；未覆盖的浮窗则完整应用全局默认外观。
+    emit themeChanged(applied);
+
+    for (auto it = m_widgets.constBegin(); it != m_widgets.constEnd(); ++it) {
+        FloatingBoxWidget *widget = it.value();
+        if (!widget)
+            continue;
+        widget->setTheme(applied);
+        widget->applyAppearance(effectiveAppearanceOf(it.key()));
+    }
 }
 
 // ---------------------------------------------------------------------------

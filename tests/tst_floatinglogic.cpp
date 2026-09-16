@@ -990,6 +990,104 @@ private slots:
         QCOMPARE(s.lastBoxName(), QStringLiteral("临时"));
     }
 
+    // 防的是：圆角平滑度没有进入配置契约，单盒和全局主题会互相覆盖错值。
+    void cornerSmoothingRoundTripAndNormalization()
+    {
+        BoxAppearance a;
+        QCOMPARE(a.cornerSmoothing, 1);
+        QVERIFY(a.isDefault());
+
+        QCOMPARE(BoxAppearance::normalizeCornerSmoothing(-9), 0);
+        QCOMPARE(BoxAppearance::normalizeCornerSmoothing(99), 2);
+        QCOMPARE(BoxAppearance::normalizeCornerSmoothing(2), 2);
+
+        if (!m_configWritable)
+            QSKIP("配置目录不可写（受限环境）");
+
+        Settings s;
+        const QString box = QStringLiteral("圆角平滑测试");
+        a.cornerRadius = 12;
+        a.cornerSmoothing = 2;
+        s.setFloatAppearance(box, a);
+
+        BoxAppearance back = s.floatAppearance(box);
+        QCOMPARE(back.cornerRadius, 12);
+        QCOMPARE(back.cornerSmoothing, 2);
+        QVERIFY(s.hasFloatAppearanceOverride(box));
+
+        s.clearFloatAppearanceOverride(box);
+        QVERIFY(!s.hasFloatAppearanceOverride(box));
+        QVERIFY(s.floatAppearance(box).isDefault());
+    }
+
+    // 恢复跟随全局只应清外观覆盖，不能把“钉住”也顺手清掉。
+    void clearAppearanceOverridePreservesLocked()
+    {
+        if (!m_configWritable)
+            QSKIP("配置目录不可写（受限环境）");
+
+        Settings s;
+        const QString box = QStringLiteral("保留钉住");
+        BoxAppearance a;
+        a.opacity = 70;
+        s.setFloatAppearance(box, a);
+        s.setFloatLocked(box, true);
+
+        QVERIFY(s.hasFloatAppearanceOverride(box));
+        QVERIFY(s.floatLocked(box));
+
+        s.clearFloatAppearanceOverride(box);
+        QVERIFY(!s.hasFloatAppearanceOverride(box));
+        QVERIFY2(s.floatLocked(box), "恢复跟随全局不能清掉 locked");
+
+        s.clearFloatAppearance(box);
+        QVERIFY2(!s.floatLocked(box), "删除盒才应清掉 locked");
+    }
+
+    // 防的是：全局主题读写不完整、默认主题落盘，或非法颜色 / 透明度不做归一化。
+    void appThemeRoundTripAndDefaults()
+    {
+        AppTheme defaults;
+        QVERIFY(defaults.isDefault());
+        QCOMPARE(defaults.windowOpacity, 100);
+
+        AppTheme bad;
+        bad.windowOpacity = 0;
+        bad.primary = QColor();
+        bad.normalize();
+        QCOMPARE(bad.windowOpacity, 40);
+        QCOMPARE(bad.primary, defaults.primary);
+
+        if (!m_configWritable)
+            QSKIP("配置目录不可写（受限环境）");
+
+        Settings s;
+        AppTheme theme;
+        theme.windowOpacity = 72;
+        theme.primary = QColor(10, 20, 30);
+        theme.floatDefaults.opacity = 80;
+        theme.floatDefaults.cornerRadius = 16;
+        theme.floatDefaults.cornerSmoothing = 2;
+        s.setAppTheme(theme);
+
+        const AppTheme back = s.appTheme();
+        QCOMPARE(back.windowOpacity, 72);
+        QCOMPARE(back.primary, QColor(10, 20, 30));
+        QCOMPARE(back.floatDefaults.opacity, 80);
+        QCOMPARE(back.floatDefaults.cornerRadius, 16);
+        QCOMPARE(back.floatDefaults.cornerSmoothing, 2);
+        QVERIFY(!back.isDefault());
+
+        s.setAppTheme(AppTheme());
+        QVERIFY(s.appTheme().isDefault());
+
+        QSettings ini(floatingIniPath(), QSettings::IniFormat);
+        for (const QString &key : ini.allKeys()) {
+            QVERIFY2(!key.startsWith(QStringLiteral("theme/")),
+                     qPrintable(QStringLiteral("默认主题不该留下键：%1").arg(key)));
+        }
+    }
+
     // =======================================================================
     // 九、窗口推开几何计算（WindowLayout::computePushDown）
     //

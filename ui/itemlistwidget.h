@@ -77,6 +77,9 @@ public:
     // 而且必须避开列表的样式表（见 floatingboxwidget.cpp 的说明）。
     void applyAppearance(const BoxAppearance &appearance);
 
+    // 应用全局主题颜色。主窗口与浮窗共用本控件，但各自下发同一份主题。
+    void setTheme(const AppTheme &theme);
+
     // 选中项的完整路径清单。
     QStringList selectedPaths() const;
 
@@ -158,6 +161,12 @@ private:
 
     QFileIconProvider *m_iconProvider = nullptr;   // 系统图标提供者（懒建，只建一次）
     bool               m_dragActive   = false;     // 拖拽高亮当前是否生效
+
+    // 拖拽高亮临时替换样式表前保存的基础样式；关闭高亮时必须恢复它，
+    // 绝不能 setStyleSheet(QString()) 把主题样式一起清掉。
+    QString m_baseStyleSheet;
+
+    AppTheme m_theme;
 
     // 是否已经应用过一次外观。
     //

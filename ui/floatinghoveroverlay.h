@@ -45,6 +45,8 @@ public:
     void setAnimationSpeed(BoxAppearance::AnimationSpeed speed);
     void setAnimationsEnabled(bool on);
     void setCornerRadius(int radius);
+    void setCornerSmoothing(int smoothing);
+    void setThemeColors(const QColor &outline, const QColor &highlight);
 
     // 鼠标进入 / 离开时调用。true = 光晕亮起，false = 平滑消退。
     void setActive(bool active);
@@ -54,6 +56,10 @@ public:
 
     // Q_PROPERTY 的写入端；公开是为了动画能通过属性系统驱动它。
     void setHoverProgress(qreal progress);
+
+signals:
+    // 光影完全消退后发出。浮窗用它把“悬停期间暂缓的遮罩刷新”补上。
+    void fadeOutFinished();
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -70,6 +76,10 @@ private:
     BoxAppearance::AnimationSpeed    m_speed = BoxAppearance::AnimationSpeed::Standard;
     bool  m_animationsOn = true;
     int   m_cornerRadius = 8;
+    int   m_cornerSmoothing = 1;
+
+    QColor m_outlineColor = QColor(0x1A, 0x73, 0xE8);
+    QColor m_highlightColor = QColor(255, 255, 255);
 
     bool  m_active = false;
     qreal m_progress = 0.0;

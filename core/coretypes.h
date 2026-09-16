@@ -1,6 +1,7 @@
 #ifndef CORETYPES_H
 #define CORETYPES_H
 
+#include <QColor>
 #include <QString>
 #include <QDateTime>
 
@@ -123,6 +124,7 @@ struct BoxAppearance
     int hoverExpandDelayMs   = 250;
     int hoverCollapseDelayMs = 400;
     int cornerRadius         = 8;
+    int cornerSmoothing      = 1;   // 0=锐利 1=标准 2=更平滑
 
     // 由 viewMode 推导的图标像素（iconSize 为 0 时使用）。
     static int defaultIconSizeFor(ViewMode mode);
@@ -145,6 +147,7 @@ struct BoxAppearance
     inline static constexpr int kHoverExpandDelaysMs[3]   = { 150, 250, 400 };
     inline static constexpr int kHoverCollapseDelaysMs[3] = { 250, 400, 600 };
     inline static constexpr int kCornerRadii[4]           = { 4, 8, 12, 16 };
+    inline static constexpr int kCornerSmoothings[3]      = { 0, 1, 2 };
 
     static HoverEffect      normalizeHoverEffect(int raw);
     static FeedbackStrength normalizeFeedbackStrength(int raw);
@@ -152,6 +155,40 @@ struct BoxAppearance
     static int              normalizeHoverExpandDelayMs(int raw);
     static int              normalizeHoverCollapseDelayMs(int raw);
     static int              normalizeCornerRadius(int raw);
+    static int              normalizeCornerSmoothing(int raw);
+};
+
+// ---------------------------------------------------------------------------
+// 全局主题：中控窗口与所有浮窗默认外观的唯一来源。
+//
+// 单个浮窗若没有自己的覆盖配置，就完整使用 floatDefaults；若主人从浮窗
+// 右键保存过外观，则该盒保留一份完整覆盖，不被后续全局主题改动覆盖。
+// ---------------------------------------------------------------------------
+struct AppTheme
+{
+    QColor windowBackground = QColor(248, 249, 250);
+    QColor surface          = QColor(255, 255, 255);
+    QColor titleBar         = QColor(241, 243, 244);
+    QColor text             = QColor(32, 33, 36);
+    QColor mutedText        = QColor(95, 99, 104);
+    QColor border           = QColor(218, 220, 224);
+    QColor hover            = QColor(241, 243, 244);
+    QColor pressed          = QColor(232, 234, 237);
+    QColor primary          = QColor(26, 115, 232);
+    QColor primaryHover     = QColor(23, 101, 204);
+    QColor primaryPressed   = QColor(20, 83, 159);
+    QColor onPrimary        = QColor(255, 255, 255);
+    QColor danger           = QColor(232, 17, 35);
+    QColor dangerPressed    = QColor(197, 15, 31);
+
+    // 中控主窗口的整窗透明度，百分比 40..100（100 = 完全不透明）。
+    // 设下限是为了避免主人把控制中心调到几乎看不见而无法恢复。
+    int windowOpacity = 100;
+
+    BoxAppearance floatDefaults;
+
+    bool isDefault() const;
+    void normalize();
 };
 
 #endif // CORETYPES_H

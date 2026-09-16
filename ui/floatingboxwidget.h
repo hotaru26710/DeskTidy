@@ -87,6 +87,10 @@ public:
     // 标题栏是个纯展示控件，让它碰配置会让"状态从哪来"多出一条路径。
     void setLockedLook(bool locked);
 
+    // 应用全局主题颜色。标题栏是独立控件，但颜色统一由浮窗下发，
+    // 避免标题栏自己读取配置导致两条状态来源。
+    void setTheme(const AppTheme &theme);
+
     // 当前是否钉住。浮窗需要它来同步右键菜单的勾选态。
     bool isLockedLook() const { return m_lockedLook; }
 
@@ -160,6 +164,8 @@ private:
     // 锁图标的当前外观。
     bool m_lockedLook = false;
 
+    AppTheme m_theme;
+
     // 拖动窗口用：记录"按下时鼠标相对窗口左上角的偏移"，
     // 移动时用「全局鼠标位置 - 偏移」算出新窗口位置。
     // 这样拖动时窗口不会跳到鼠标正下方，手感才对。
@@ -232,6 +238,10 @@ public:
 
     // 当前生效的外观。右键菜单据此打勾、并作为"改一项"的基准值。
     BoxAppearance appearance() const { return m_appearance; }
+
+    // 应用全局主题颜色。中控主题只控制全局颜色；单盒外观覆盖仍由
+    // applyAppearance 管理，两者互不夺权。
+    void setTheme(const AppTheme &theme);
 
     // ---- 总在最前 ----
 
@@ -450,6 +460,9 @@ private slots:
 
 private:
     void buildUi();
+
+    // 按 m_theme 重新套用所有颜色相关样式。尺寸、透明度和动画状态不变。
+    void applyThemeToUi();
     void connectServiceSignals();
 
     // 卷起的实际执行。rolledUp 为真时隐藏操作条与列表、把高度收到只剩标题栏。
@@ -634,6 +647,9 @@ private:
     // 当前生效的外观。默认值即"改造前行为"（不透明 + 列表）。
     BoxAppearance m_appearance;
 
+    // 当前全局主题颜色。只由 manager 下发。
+    AppTheme m_theme;
+
     FloatingBoxTitleBar *m_titleBar   = nullptr;
 
     // 悬停光影覆盖层。不在布局里 —— 它必须铺满**整个客户区**（含标题栏），
@@ -796,6 +812,13 @@ private:
     // 而是"正在投放的过程中窗口自己缩起来"—— 那会把主人正要放下的
     // 东西弄丢（缩起后列表被隐藏，drop 就没有接收者了）。
     bool m_dragHoverActive  = false;
+
+    // 最近一次真正下发的圆角平滑度。
+    // 与半径分开缓存，便于只在实际改变外观时重建窗口遮罩。
+    int m_appliedCornerSmoothing = -1;
+
+    // 圆角变化时若鼠标正悬停，先记录待刷新，等触感退场后再调用 setMask()。
+    bool m_maskRefreshPending = false;
 
     // 最近一次真正下发的圆角半径。
     // 用途：applyAppearance 会在切视图 / 改透明度时被反复调用，而圆角是

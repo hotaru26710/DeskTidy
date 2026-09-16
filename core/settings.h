@@ -94,9 +94,26 @@ public:
     BoxAppearance floatAppearance(const QString &boxName) const;
     void          setFloatAppearance(const QString &boxName, const BoxAppearance &appearance);
 
-    // 删掉某个盒的全部外观配置。
-    // 删收纳盒时调用：不清的话，将来建一个同名盒会"继承"上一个盒的外观。
+    // 删掉某个盒的独立外观覆盖，让它重新跟随全局主题。
+    //
+    // 注意：只清外观，不动"钉住"等交互状态 —— 恢复跟随后浮窗仍应保持
+    // 主人之前设置的位置约束。删除收纳盒时走 clearFloatAppearance()。
+    void clearFloatAppearanceOverride(const QString &boxName);
+
+    // 删掉某个盒的全部持久化状态（外观覆盖 + 钉住等）。
+    // 仅删收纳盒时调用。
     void clearFloatAppearance(const QString &boxName);
+
+    // 某盒是否有独立外观覆盖。旧版本只要出现过任一外观键，也视为覆盖，
+    // 从而升级后不会悄悄被全局主题改掉原有外观。
+    bool hasFloatAppearanceOverride(const QString &boxName) const;
+
+    // ---- 全局主题 ----
+    //
+    // 中控窗口颜色/透明度 + 浮窗默认外观。只保存相对内置默认值的非默认项；
+    // 每个浮窗是否使用它由 hasFloatAppearanceOverride 决定。
+    AppTheme appTheme() const;
+    void     setAppTheme(const AppTheme &theme);
 
     // ---- 浮窗「钉住」（每盒一份）----
     //

@@ -58,6 +58,8 @@ set(DESKTIDY_UI_SOURCES
     ui/floatingboxmanager.cpp
     ui/trayicon.cpp
     ui/appearancedialog.cpp
+    ui/themedialog.cpp
+    ui/settingsdialog.cpp
 )
 
 set(DESKTIDY_UI_HEADERS
@@ -71,6 +73,8 @@ set(DESKTIDY_UI_HEADERS
     ui/floatingboxmanager.h
     ui/trayicon.h
     ui/appearancedialog.h
+    ui/themedialog.h
+    ui/settingsdialog.h
 )
 
 add_executable(DeskTidy WIN32

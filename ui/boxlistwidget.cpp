@@ -1,5 +1,6 @@
 #include "boxlistwidget.h"
 
+#include <QColor>
 #include <QLabel>
 #include <QResizeEvent>
 #include <QSignalBlocker>
@@ -36,6 +37,28 @@ BoxListWidget::BoxListWidget(QWidget *parent)
 
     connect(this, &QListWidget::currentItemChanged,
             this, &BoxListWidget::onCurrentItemChanged);
+}
+
+void BoxListWidget::setTheme(const AppTheme &theme)
+{
+    AppTheme normalized = theme;
+    normalized.normalize();
+
+    QPalette pal = palette();
+    pal.setColor(QPalette::Base, normalized.surface);
+    pal.setColor(QPalette::Window, normalized.surface);
+    pal.setColor(QPalette::Text, normalized.text);
+    pal.setColor(QPalette::WindowText, normalized.text);
+    pal.setColor(QPalette::Highlight, normalized.primary);
+    pal.setColor(QPalette::HighlightedText, normalized.onPrimary);
+    pal.setColor(QPalette::AlternateBase, normalized.windowBackground);
+    pal.setColor(QPalette::Disabled, QPalette::Text, normalized.mutedText);
+    setPalette(pal);
+
+    if (m_emptyHint) {
+        m_emptyHint->setStyleSheet(QStringLiteral("color: %1; background: transparent;")
+                                       .arg(normalized.mutedText.name(QColor::HexArgb)));
+    }
 }
 
 void BoxListWidget::setBoxes(const QList<StorageBox> &boxes)

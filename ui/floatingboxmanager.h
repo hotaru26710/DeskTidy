@@ -86,15 +86,25 @@ public:
     // 再按 y，再按 x，最后按盒名兜底（保证完全同位置时也有确定顺序）。
     QList<FloatingBoxWidget *> widgetsInLayoutOrder() const;
 
-    // ---- 外观（每盒一份）----
+    // ---- 外观（每盒一份）与全局主题 ----
     //
     // 写配置 + 广播，收在这里而不是让两个入口（浮窗右键、主窗口设置）
     // 各自写配置：各写一份必然有一处漏发信号，表现是"从一个入口改完，
     // 另一个入口还显示旧值"这种最难查的不一致。
     void applyAppearance(const QString &boxName, const BoxAppearance &appearance);
 
-    // 读某盒当前外观。盒子没有专门配置时返回默认外观（不透明 + 列表）。
+    // 单盒最终生效的外观：有覆盖时用覆盖，否则用主题里的浮窗默认值。
+    BoxAppearance effectiveAppearanceOf(const QString &boxName) const;
+
+    // 兼容旧调用点的别名，语义等同 effectiveAppearanceOf。
     BoxAppearance appearanceOf(const QString &boxName) const;
+
+    bool hasAppearanceOverride(const QString &boxName) const;
+    void clearAppearanceOverride(const QString &boxName);
+
+    // 当前全局主题。中控颜色 + 所有浮窗的默认外观都存在这里。
+    AppTheme theme() const;
+    void setTheme(const AppTheme &theme);
 
     // ---- 界面动画总开关 ----
 
@@ -145,6 +155,9 @@ signals:
     // 某个盒的外观变了。浮窗据此重读并应用 ——
     // 两个入口改完都会经过这里，所以两边表现必然一致。
     void boxAppearanceChanged(const QString &boxName);
+
+    // 全局主题变化：中控据此重绘，未覆盖的浮窗也会重新应用主题默认外观。
+    void themeChanged(const AppTheme &theme);
 
 private slots:
     // AppService::boxContentsChanged 的处理。
