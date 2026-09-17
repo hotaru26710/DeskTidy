@@ -180,6 +180,23 @@ public:
     bool hoverExpandEnabled() const;
     void setHoverExpandEnabled(bool on);
 
+    // ---- 贴边收纳 ----
+
+    // 是否允许拖动到屏幕左右边缘时收成小图标。
+    // 关闭后拖到边缘也不会进入贴边态；已贴边的小图标仍可正常展开/收回。
+    bool edgeDockEnabled() const;
+    void setEdgeDockEnabled(bool on);
+
+    // 侧边小图标是否参与浮窗让位（可被其他展开的浮窗推动）。
+    bool edgeIconPushable() const;
+    void setEdgeIconPushable(bool on);
+
+    // 每盒的贴边状态。side: 0=未贴边，1=左边缘，2=右边缘。
+    // centerY 是小图标中心在屏幕上的 y 坐标；未贴边时为 0。
+    int  floatEdgeSide(const QString &boxName) const;
+    int  floatEdgeCenterY(const QString &boxName) const;
+    void setFloatEdgeState(const QString &boxName, int side, int centerY);
+
     // ---- 开机自启方式 ----
 
     // 开机自启是否采用静默方式。

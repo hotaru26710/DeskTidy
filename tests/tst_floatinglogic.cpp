@@ -1088,6 +1088,35 @@ private slots:
         }
     }
 
+    // 防的是：贴边小图标状态没有持久化，或删除盒后残留旧位置。
+    void edgeDockSettingsRoundTrip()
+    {
+        if (!m_configWritable)
+            QSKIP("配置目录不可写（受限环境）");
+
+        Settings s;
+        const QString box = QStringLiteral("贴边盒");
+
+        QVERIFY(s.edgeDockEnabled());
+        QVERIFY(s.edgeIconPushable());
+        s.setEdgeDockEnabled(false);
+        s.setEdgeIconPushable(false);
+        QVERIFY(!s.edgeDockEnabled());
+        QVERIFY(!s.edgeIconPushable());
+
+        s.setFloatEdgeState(box, 2, 360);
+        QCOMPARE(s.floatEdgeSide(box), 2);
+        QCOMPARE(s.floatEdgeCenterY(box), 360);
+
+        s.clearFloatAppearance(box);
+        QCOMPARE(s.floatEdgeSide(box), 0);
+        QCOMPARE(s.floatEdgeCenterY(box), 0);
+
+        // 非法 side 必须归一化成“未贴边”，不能把怪值带进运行时。
+        s.setFloatEdgeState(box, 99, 123);
+        QCOMPARE(s.floatEdgeSide(box), 0);
+    }
+
     // =======================================================================
     // 九、窗口推开几何计算（WindowLayout::computePushDown）
     //

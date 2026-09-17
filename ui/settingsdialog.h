@@ -53,6 +53,8 @@ private:
 
     QCheckBox *m_animationsCheck = nullptr;
     QCheckBox *m_hoverExpandCheck = nullptr;
+    QCheckBox *m_edgeDockEnabledCheck = nullptr;
+    QCheckBox *m_edgeIconPushableCheck = nullptr;
     QPlainTextEdit *m_excludeEditor = nullptr;
 
     QCheckBox *m_autoStartCheck = nullptr;

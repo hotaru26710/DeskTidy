@@ -156,6 +156,12 @@ void FloatingBoxManager::openBox(const QString &boxName, const QString &boxPath)
     // 可能要求更大的尺寸 —— 顺序反了会被几何恢复覆盖掉。
     widget->applyAppearance(effectiveAppearanceOf(boxName));
 
+    // 上次退出时如果是贴边小图标，这里直接恢复图标态；开机自启也不会变回大浮窗。
+    if (m_service->settings()->edgeDockEnabled()) {
+        widget->restoreEdgeDockState(m_service->settings()->floatEdgeSide(boxName),
+                                     m_service->settings()->floatEdgeCenterY(boxName));
+    }
+
     connect(widget, &FloatingBoxWidget::closeRequested,
             this, &FloatingBoxManager::closeBox);
 
@@ -451,7 +457,7 @@ void FloatingBoxManager::setBoxLocked(const QString &boxName, bool locked)
         // 所以这一刻重新取一次名单，而不是捕获上面那份快照。
         const QList<FloatingBoxWidget *> ordered = widgetsInLayoutOrder();
         for (FloatingBoxWidget *w : ordered) {
-            if (w && !w->isRolledUp()) {
+            if (w && !w->isRolledUp() && !w->isEdgeAttached()) {
                 relayoutAround(w, true);
             }
         }
@@ -539,6 +545,14 @@ QList<WindowLayout::Item> FloatingBoxManager::layoutItemsExcept(FloatingBoxWidge
             continue;
         }
 
+        // 贴边附着的浮窗默认退出普通让位协调；若主人允许“小图标可被推动”，
+        // 只有缩成小图标的那些重新参与，临时展开态仍不参与。
+        const bool pushableDockIcon = m_service->settings()->edgeIconPushable()
+                                      && w->isEdgeDocked();
+        if (w->isEdgeAttached() && !pushableDockIcon) {
+            continue;
+        }
+
         // 被钉住的浮窗不参与推动 —— 别人推不动它。
         //
         // ⚠️ 这个过滤必须在**这里**做，不能塞进 WindowLayout::computePushDown。
@@ -591,7 +605,10 @@ void FloatingBoxManager::relayoutAround(FloatingBoxWidget *anchor, bool expanded
     // 既不接受位移也不施加位移。只做一半的话会出怪事 ——
     // 一个钉住的浮窗展开时把下面所有窗口推走，自己却纹丝不动，
     // 主人会以为锁坏了。
-    if (anchor->isLocked()) {
+    const bool anchorIsPushableDockIcon = m_service->settings()->edgeIconPushable()
+                                          && anchor->isEdgeDocked();
+    if (anchor->isLocked()
+        || (anchor->isEdgeAttached() && !anchorIsPushableDockIcon)) {
         return;
     }
 
@@ -635,7 +652,7 @@ void FloatingBoxManager::relayoutAround(FloatingBoxWidget *anchor, bool expanded
             if (!w || w == anchor) {
                 continue;
             }
-            if (w->isRolledUp() || w->isLocked() || !w->isVisible()) {
+            if (w->isRolledUp() || w->isEdgeAttached() || w->isLocked() || !w->isVisible()) {
                 continue;   // 卷起的/钉住的/不可见的不占地方，也不推别人
             }
             stillExpanded.append(w);

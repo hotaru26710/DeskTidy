@@ -132,6 +132,16 @@ QWidget *SettingsDialog::buildGeneralPage()
     m_hoverExpandCheck->setChecked(m_service->settings()->hoverExpandEnabled());
     m_hoverExpandCheck->setToolTip(tr("只控制自动展开；悬停光影触感仍可在主题外观里单独设置。"));
     behaviorLayout->addWidget(m_hoverExpandCheck);
+
+    m_edgeDockEnabledCheck = new QCheckBox(tr("拖动到屏幕左右边缘时收成小图标"), behavior);
+    m_edgeDockEnabledCheck->setChecked(m_service->settings()->edgeDockEnabled());
+    m_edgeDockEnabledCheck->setToolTip(tr("关闭后，浮窗接近左右边缘也不会贴边收起。"));
+    behaviorLayout->addWidget(m_edgeDockEnabledCheck);
+
+    m_edgeIconPushableCheck = new QCheckBox(tr("侧边小图标可以被其他浮窗推动"), behavior);
+    m_edgeIconPushableCheck->setChecked(m_service->settings()->edgeIconPushable());
+    m_edgeIconPushableCheck->setToolTip(tr("开启后，小图标会参与浮窗让位；关闭后固定在当前边缘位置。"));
+    behaviorLayout->addWidget(m_edgeIconPushableCheck);
     layout->addWidget(behavior);
 
     auto *exclude = makeCard(page);
@@ -268,6 +278,8 @@ void SettingsDialog::saveAll()
     m_service->settings()->setExcludedNames(names);
     m_floating->setAnimationsEnabled(m_animationsCheck->isChecked());
     m_floating->setHoverExpandEnabled(m_hoverExpandCheck->isChecked());
+    m_service->settings()->setEdgeDockEnabled(m_edgeDockEnabledCheck->isChecked());
+    m_service->settings()->setEdgeIconPushable(m_edgeIconPushableCheck->isChecked());
 
     const bool silent = m_autoStartModeCombo->currentIndex() == 1;
     m_service->settings()->setAutoStartSilent(silent);

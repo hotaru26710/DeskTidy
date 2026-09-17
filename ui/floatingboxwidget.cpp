@@ -91,6 +91,15 @@ constexpr int kMinimumWidth  = 220;
 constexpr int kMinimumHeight = 120;
 constexpr int kTitleBarHeight = 28;
 
+// 贴边收纳态：小方块尺寸、触摸延迟和整窗透明度。
+constexpr int kEdgeDockSize = 56;
+constexpr int kEdgeDockTouchDelayMs = 90;
+constexpr int kEdgeAutoRetractDelayMs = 420;
+constexpr int kEdgeDetachDistance = 72;
+constexpr qreal kEdgeDockOpacity = 0.72;
+constexpr int kEdgeHitMargin = 12;
+constexpr int kEdgeApproachDistance = 90;
+
 // 除标题栏外两段"装饰"的高度。算"图标模式需要多大"时要把它们算进去，
 // 否则算出来的目标高度会少一截，图标照样被挤。
 // 数值与 buildUi 里各段实际高度对应（操作条含上下 4px 内边距、手柄行 14px + 余量）。
@@ -405,6 +414,7 @@ void FloatingBoxTitleBar::mouseMoveEvent(QMouseEvent *event)
     }
 
     window()->move(event->globalPosition().toPoint() - m_dragOffset);
+    emit dragMoved(event->globalPosition().toPoint());
     event->accept();
 }
 
@@ -556,6 +566,31 @@ FloatingBoxWidget::FloatingBoxWidget(AppService *service,
     m_posAnim->setDuration(kLayoutSlideDurationMs);
     m_posAnim->setEasingCurve(QEasingCurve::OutCubic);
 
+    // 贴边/回弹动画同时改位置与尺寸，所以单独使用 "geometry"。
+    m_edgeAnim = new QPropertyAnimation(this, "geometry", this);
+    m_edgeAnim->setEasingCurve(QEasingCurve::OutCubic);
+    connect(m_edgeAnim, &QPropertyAnimation::finished, this, [this]() {
+        if (m_edgeAnimStage == EdgeAnimStage::Docking)
+            finishEdgeDock();
+        else if (m_edgeAnimStage == EdgeAnimStage::RevealingHeader)
+            finishEdgeHeaderReveal();
+        else if (m_edgeAnimStage == EdgeAnimStage::Detaching)
+            finishEdgeDetach();
+        m_edgeAnimStage = EdgeAnimStage::None;
+    });
+
+    m_edgeRevealTimer = new QTimer(this);
+    m_edgeRevealTimer->setSingleShot(true);
+    m_edgeRevealTimer->setInterval(kEdgeDockTouchDelayMs);
+    connect(m_edgeRevealTimer, &QTimer::timeout,
+            this, &FloatingBoxWidget::onEdgeRevealTimeout);
+
+    m_edgeRetractTimer = new QTimer(this);
+    m_edgeRetractTimer->setSingleShot(true);
+    m_edgeRetractTimer->setInterval(kEdgeAutoRetractDelayMs);
+    connect(m_edgeRetractTimer, &QTimer::timeout,
+            this, &FloatingBoxWidget::onEdgeRetractTimeout);
+
     // ⚠️⚠️ m_posAnimating 必须覆盖**整个动画区间**，所以挂在 stateChanged 上。
     //
     // 目标是"动画期间所有 moveEvent 都不落盘"。若只在起止两端手动置位，
@@ -692,8 +727,32 @@ void FloatingBoxWidget::buildUi()
     // 不再可靠，所以这两个信号是唯一可信的时机。
     connect(m_titleBar, &FloatingBoxTitleBar::dragStarted,
             this, &FloatingBoxWidget::refreshHoverGlow);
+    connect(m_titleBar, &FloatingBoxTitleBar::dragMoved,
+            this, [this](const QPoint &globalPos) {
+                if (m_edgeAnimating || m_edgeIconMode || m_edgeExpandedFromIcon)
+                    return;
+                if (!m_service->settings()->edgeDockEnabled())
+                    return;
+
+                QScreen *screen = QApplication::screenAt(globalPos);
+                if (!screen)
+                    return;
+                const QRect avail = screen->availableGeometry();
+                EdgeSide side = EdgeSide::None;
+                if (globalPos.x() <= avail.left() + kEdgeApproachDistance)
+                    side = EdgeSide::Left;
+                else if (globalPos.x() >= avail.right() - kEdgeApproachDistance)
+                    side = EdgeSide::Right;
+                if (side == EdgeSide::None)
+                    return;
+
+                beginEdgePreview(side, globalPos);
+            });
     connect(m_titleBar, &FloatingBoxTitleBar::dragFinished,
-            this, &FloatingBoxWidget::refreshHoverGlow);
+            this, [this]() {
+                refreshHoverGlow();
+                handleDragFinished();
+            });
 
     // 锁图标 -> 请求写配置并广播。
     //
@@ -926,6 +985,17 @@ void FloatingBoxWidget::buildUi()
                 m_maskSize = QSize();
                 updateRoundedMask();
             });
+
+    // ---- 贴边小图标 ----
+    // 只在贴边态显示。它不参与布局，直接覆盖在小小的客户区中央。
+    m_dockBadge = new QLabel(this);
+    m_dockBadge->setObjectName(QStringLiteral("dockBadge"));
+    m_dockBadge->setAlignment(Qt::AlignCenter);
+    m_dockBadge->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_dockBadge->setFocusPolicy(Qt::NoFocus);
+    m_dockBadge->setVisible(false);
+    updateDockBadge();
+
     layoutHoverOverlay();
     syncHoverOverlay();
 }
@@ -1442,6 +1512,11 @@ void FloatingBoxWidget::persistRolledUp(bool rolledUp)
 
 bool FloatingBoxWidget::hoverInteractionBlocked() const
 {
+    // 贴边收纳态及其回弹动画完全由自己的状态机驱动，不参与普通悬停逻辑。
+    if (m_edgeIconMode || m_edgeAnimating) {
+        return true;
+    }
+
     // 被钉住：悬停自动展开与自动卷起**整个停用**。
     //
     // ⚠️ 放在最前面，因为它是唯一一条"主人明确要求别动我"的理由 ——
@@ -1608,6 +1683,541 @@ void FloatingBoxWidget::stopHoverTimers()
     }
 }
 
+// ---------------------------------------------------------------------------
+// 贴边收纳态
+// ---------------------------------------------------------------------------
+int FloatingBoxWidget::edgeAnimationDurationMs() const
+{
+    return rollDurationMsFor(m_appearance.animationSpeed) + 20;
+}
+
+void FloatingBoxWidget::updateDockBadge()
+{
+    if (!m_dockBadge)
+        return;
+
+    QString text = m_boxName.trimmed();
+    text = text.isEmpty() ? tr("盒") : text.left(1).toUpper();
+    m_dockBadge->setText(text);
+
+    QColor background = m_theme.primary;
+    background.setAlpha(226);
+    QColor border = m_theme.onPrimary;
+    border.setAlpha(96);
+    m_dockBadge->setStyleSheet(QStringLiteral(
+        "QLabel#dockBadge {"
+        "  background: %1;"
+        "  color: %2;"
+        "  border: 1px solid %3;"
+        "  border-radius: 18px;"
+        "  font-size: 22px;"
+        "  font-weight: 700;"
+        "}").arg(background.name(QColor::HexArgb),
+                  m_theme.onPrimary.name(QColor::HexArgb),
+                  border.name(QColor::HexArgb)));
+    m_dockBadge->setToolTip(tr("贴边收纳：鼠标移上来展开「%1」").arg(m_boxName));
+}
+
+void FloatingBoxWidget::persistEdgeDockState()
+{
+    const int side = m_edgeDockSide == EdgeSide::Left ? 1
+                     : m_edgeDockSide == EdgeSide::Right ? 2
+                                                         : 0;
+    const int centerY = m_edgeIconMode ? geometry().center().y()
+                                       : m_preDockGeometry.center().y();
+    m_service->settings()->setFloatEdgeState(m_boxName, side, centerY);
+}
+
+QRect FloatingBoxWidget::edgeDockGeometry(EdgeSide side) const
+{
+    QRect reference = m_preDockGeometry.isValid() ? m_preDockGeometry : frameGeometry();
+    QScreen *screen = QApplication::screenAt(reference.center());
+    if (!screen)
+        screen = QApplication::primaryScreen();
+    if (!screen)
+        return geometry();
+
+    const QRect avail = screen->availableGeometry();
+    const int size = kEdgeDockSize;
+    const int half = size / 2;
+
+    // 侧边附着时只露一半，另一半藏到屏幕外；露出的半边仍足够当鼠标命中区。
+    const int x = side == EdgeSide::Left ? avail.left() - half
+                                         : avail.right() - half + 1;
+    const int y = qBound(avail.top() + 8,
+                         reference.center().y() - size / 2,
+                         avail.bottom() - size - 7);
+    return QRect(QPoint(x, y), QSize(size, size));
+}
+
+QRect FloatingBoxWidget::edgeHeaderGeometry(EdgeSide side) const
+{
+    QRect reference = m_preDockGeometry.isValid() ? m_preDockGeometry : frameGeometry();
+    QScreen *screen = QApplication::screenAt(reference.center());
+    if (!screen)
+        screen = QApplication::primaryScreen();
+    if (!screen)
+        return geometry();
+
+    const QRect avail = screen->availableGeometry();
+    const int width = qBound(kMinimumWidth,
+                             reference.width(),
+                             qMax(kMinimumWidth, avail.width() - 24));
+    const int x = side == EdgeSide::Left ? avail.left() : avail.right() - width + 1;
+    const int h = rolledUpHeight();
+
+    // 标题条的位置要让最终的完整浮窗尽量留在屏幕里，避免展开后越界。
+    const int finalHeight = qMax(m_expandedHeight, kMinimumHeight);
+    const int minY = avail.top() + 8;
+    const int maxY = qMax(minY, avail.bottom() - finalHeight - 7);
+    const int y = qBound(minY, reference.center().y() - h / 2, maxY);
+    return QRect(QPoint(x, y), QSize(width, h));
+}
+
+void FloatingBoxWidget::animateEdgeGeometryTo(const QRect &target, EdgeAnimStage stage)
+{
+    if (!target.isValid())
+        return;
+
+    m_edgeAnimStage = stage;
+    const QRect start = geometry();
+
+    if (!isVisible() || !m_animationsOn || !m_edgeAnim || start == target) {
+        setGeometry(target);
+        if (stage == EdgeAnimStage::Docking)
+            finishEdgeDock();
+        else if (stage == EdgeAnimStage::RevealingHeader)
+            finishEdgeHeaderReveal();
+        m_edgeAnimStage = EdgeAnimStage::None;
+        return;
+    }
+
+    m_edgeAnim->stop();
+    m_edgeAnim->setDuration(edgeAnimationDurationMs());
+    m_edgeAnim->setStartValue(start);
+    m_edgeAnim->setEndValue(target);
+    m_edgeAnim->start();
+}
+
+void FloatingBoxWidget::handleDragFinished()
+{
+    if (m_edgeAnimating || m_edgeIconMode || !m_titleBar)
+        return;
+
+    if (m_edgeExpandedFromIcon && m_edgeDockSide != EdgeSide::None) {
+        QScreen *screen = QApplication::screenAt(frameGeometry().center());
+        if (!screen)
+            screen = QApplication::primaryScreen();
+        bool nearEdge = false;
+        if (screen) {
+            const QRect avail = screen->availableGeometry();
+            const int distance = m_edgeDockSide == EdgeSide::Left
+                                     ? frameGeometry().left() - avail.left()
+                                     : avail.right() - frameGeometry().right();
+            nearEdge = distance < kEdgeDetachDistance;
+            if (!nearEdge) {
+                detachEdgeDock();
+                return;
+            }
+        }
+
+        if (nearEdge && m_preDockGeometry.isValid()) {
+            // 沿边缘上下拖动时，把松开时的中心高度记下来；收回成小图标时要对齐这里。
+            QRect updated = frameGeometry();
+            updated.setHeight(qMax(m_expandedHeight, height()));
+            m_preDockGeometry = updated;
+            m_preDockGeometryBlob = saveGeometry();
+            persistEdgeDockState();
+        }
+
+        if (!rect().contains(mapFromGlobal(QCursor::pos())) && m_edgeRetractTimer)
+            m_edgeRetractTimer->start();
+        return;
+    }
+
+    QScreen *screen = QApplication::screenAt(QCursor::pos());
+    if (!screen)
+        screen = QApplication::primaryScreen();
+    if (!screen)
+        return;
+
+    const QRect avail = screen->availableGeometry();
+    const int x = QCursor::pos().x();
+    if (x <= avail.left() + kEdgeHitMargin) {
+        startEdgeDock(EdgeSide::Left);
+    } else if (x >= avail.right() - kEdgeHitMargin) {
+        startEdgeDock(EdgeSide::Right);
+    }
+}
+
+void FloatingBoxWidget::startEdgeDock(EdgeSide side)
+{
+    if (side == EdgeSide::None || m_edgeIconMode || m_edgeAnimating)
+        return;
+    if (!m_service->settings()->edgeDockEnabled())
+        return;
+
+    stopHoverTimers();
+    m_hoverExpanded = false;
+
+    m_preDockGeometry = geometry();
+    const int fullHeight = m_expandedHeight > rolledUpHeight()
+                               ? m_expandedHeight
+                               : geometry().height();
+    m_preDockGeometry.setHeight(qMax(fullHeight, geometry().height()));
+    m_preDockGeometryBlob = saveGeometry();
+
+    m_edgeDockSide = side;
+    m_edgeIconMode = true;
+    m_edgeAnimating = true;
+    m_edgeExpandedFromIcon = false;
+    if (m_edgeRetractTimer)
+        m_edgeRetractTimer->stop();
+
+    // 图标态要缩到 56×56，必须先解除原来的最小尺寸约束。
+    setMinimumSize(0, 0);
+    setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+
+    if (m_titleBar)
+        m_titleBar->hide();
+    if (m_actionBar)
+        m_actionBar->hide();
+    if (m_itemList)
+        m_itemList->hide();
+    if (m_gripRow)
+        m_gripRow->hide();
+    if (m_dockBadge) {
+        m_dockBadge->setGeometry(rect().adjusted(7, 7, -7, -7));
+        m_dockBadge->show();
+        m_dockBadge->raise();
+    }
+
+    updateDockBadge();
+    syncHoverOverlay();
+    animateOpacityTo(kEdgeDockOpacity, edgeAnimationDurationMs());
+    animateEdgeGeometryTo(edgeDockGeometry(side), EdgeAnimStage::Docking);
+}
+
+void FloatingBoxWidget::beginEdgePreview(EdgeSide side, const QPoint &globalPos)
+{
+    if (side == EdgeSide::None || m_edgePreviewing || m_edgeAnimating || m_edgeIconMode)
+        return;
+    if (!m_service->settings()->edgeDockEnabled())
+        return;
+
+    stopHoverTimers();
+    m_hoverExpanded = false;
+
+    m_preDockGeometry = geometry();
+    const int fullHeight = m_expandedHeight > rolledUpHeight()
+                               ? m_expandedHeight
+                               : geometry().height();
+    m_preDockGeometry.setHeight(qMax(fullHeight, geometry().height()));
+    m_preDockGeometryBlob = saveGeometry();
+
+    m_edgeDockSide = side;
+    m_edgePreviewing = true;
+    m_edgeIconMode = true;
+    m_edgeAnimating = true;
+    m_edgeExpandedFromIcon = false;
+    m_edgePreviewDragAnchor = QPoint(kEdgeDockSize / 2, kEdgeDockSize / 2);
+
+    if (m_titleBar)
+        m_titleBar->cancelDrag();
+    grabMouse();
+
+    setMinimumSize(0, 0);
+    setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+    if (m_titleBar)
+        m_titleBar->hide();
+    if (m_actionBar)
+        m_actionBar->hide();
+    if (m_itemList)
+        m_itemList->hide();
+    if (m_gripRow)
+        m_gripRow->hide();
+    if (m_dockBadge) {
+        m_dockBadge->setGeometry(rect().adjusted(7, 7, -7, -7));
+        m_dockBadge->show();
+        m_dockBadge->raise();
+    }
+
+    const QRect previewRect(globalPos - m_edgePreviewDragAnchor, QSize(kEdgeDockSize, kEdgeDockSize));
+    updateDockBadge();
+    syncHoverOverlay();
+    animateOpacityTo(kEdgeDockOpacity, edgeAnimationDurationMs());
+    animateEdgeGeometryTo(previewRect, EdgeAnimStage::Previewing);
+}
+
+void FloatingBoxWidget::finishEdgeDock()
+{
+    if (m_edgeDockSide == EdgeSide::None)
+        return;
+
+    m_edgeAnimating = false;
+    m_edgeIconMode = true;
+
+    const QRect target = edgeDockGeometry(m_edgeDockSide);
+    setGeometry(target);
+    setMinimumSize(kEdgeDockSize, kEdgeDockSize);
+    setMaximumSize(kEdgeDockSize, kEdgeDockSize);
+
+    m_maskSize = QSize();
+    updateRoundedMask();
+    layoutHoverOverlay();
+    syncHoverOverlay();
+    refreshHoverGlow();
+
+    persistEdgeDockState();
+    emit rollUpStateChanged(m_boxName, true);
+}
+
+void FloatingBoxWidget::undockFromEdge()
+{
+    if (!m_edgeIconMode || m_edgeAnimating || m_edgeDockSide == EdgeSide::None)
+        return;
+
+    const EdgeSide side = m_edgeDockSide;
+    m_edgeRevealTimer->stop();
+
+    m_edgeAnimating = true;
+    m_edgeIconMode = false;
+    m_edgeExpandedFromIcon = true;
+    if (m_edgeRetractTimer)
+        m_edgeRetractTimer->stop();
+    m_titleBar->show();
+    m_actionBar->hide();
+    m_itemList->hide();
+    if (m_gripRow)
+        m_gripRow->hide();
+    if (m_dockBadge)
+        m_dockBadge->hide();
+
+    setMinimumSize(0, 0);
+    setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+
+    syncHoverOverlay();
+    animateOpacityTo(targetOpacityFromAppearance(), edgeAnimationDurationMs());
+    animateEdgeGeometryTo(edgeHeaderGeometry(side), EdgeAnimStage::RevealingHeader);
+}
+
+void FloatingBoxWidget::finishEdgeHeaderReveal()
+{
+    m_dockBadge->hide();
+
+    m_expandedHeight = qMax(m_expandedHeight, m_preDockGeometry.height());
+    m_rolledUp = false;
+    applyRollUpState(false);
+
+    if (!m_heightAnim || m_heightAnim->state() != QAbstractAnimation::Running) {
+        finishEdgeRestore();
+        return;
+    }
+
+    connect(m_heightAnim, &QPropertyAnimation::finished,
+            this, &FloatingBoxWidget::finishEdgeRestore,
+            Qt::SingleShotConnection);
+}
+
+void FloatingBoxWidget::finishEdgeRestore()
+{
+    m_edgeAnimating = false;
+    m_edgeAnimStage = EdgeAnimStage::None;
+    m_edgeIconMode = false;
+
+    setMinimumSize(kMinimumWidth, kMinimumHeight);
+    setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+
+    m_maskSize = QSize();
+    updateRoundedMask();
+    syncHoverOverlay();
+    refreshHoverGlow();
+
+    // 从贴边图标弹出的窗口仍属于“边缘收纳关系”：鼠标离开后要能回去。
+    // 只有主人把它拖离边缘足够远，才走 detachEdgeDock() 彻底恢复正常状态。
+    if (m_edgeExpandedFromIcon) {
+        if (!rect().contains(mapFromGlobal(QCursor::pos())) && m_edgeRetractTimer)
+            m_edgeRetractTimer->start();
+        return;
+    }
+
+    m_edgeDockSide = EdgeSide::None;
+    m_preDockGeometry = QRect();
+    m_preDockGeometryBlob.clear();
+    scheduleGeometrySave();
+}
+
+void FloatingBoxWidget::onEdgeRevealTimeout()
+{
+    if (!m_edgeIconMode || m_edgeAnimating)
+        return;
+    if (!rect().contains(mapFromGlobal(QCursor::pos())))
+        return;
+    undockFromEdge();
+}
+
+void FloatingBoxWidget::collapseToEdgeIcon()
+{
+    if (!m_edgeExpandedFromIcon || m_edgeAnimating || m_edgeDockSide == EdgeSide::None)
+        return;
+
+    stopHoverTimers();
+    if (m_posAnim && m_posAnim->state() == QAbstractAnimation::Running)
+        m_posAnim->stop();
+    m_hasRestPos = false;
+    m_layoutOffset = 0;
+    m_restClearPending = false;
+    m_edgeRetractTimer->stop();
+
+    // 先卷起，再从标题条收成小图标。不能从完整浮窗一步跳成图标。
+    if (!m_rolledUp && height() > rolledUpHeight()) {
+        m_expandedHeight = height();
+    }
+    m_edgeCollapsingToIcon = true;
+    m_edgeAnimating = true;
+    m_edgeIconMode = false;
+    m_rolledUp = true;
+    applyRollUpState(true);
+
+    if (!m_heightAnim || m_heightAnim->state() != QAbstractAnimation::Running) {
+        finishEdgeRollUp();
+        return;
+    }
+
+    connect(m_heightAnim, &QPropertyAnimation::finished,
+            this, &FloatingBoxWidget::finishEdgeRollUp,
+            Qt::SingleShotConnection);
+}
+
+void FloatingBoxWidget::finishEdgeRollUp()
+{
+    if (!m_edgeCollapsingToIcon || m_edgeDockSide == EdgeSide::None)
+        return;
+
+    m_edgeCollapsingToIcon = false;
+    m_edgeIconMode = true;
+    m_edgeAnimating = true;
+
+    if (m_titleBar)
+        m_titleBar->hide();
+    if (m_actionBar)
+        m_actionBar->hide();
+    if (m_itemList)
+        m_itemList->hide();
+    if (m_gripRow)
+        m_gripRow->hide();
+
+    setMinimumSize(0, 0);
+    setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+
+    if (m_dockBadge) {
+        m_dockBadge->setGeometry(rect().adjusted(7, 7, -7, -7));
+        m_dockBadge->show();
+        m_dockBadge->raise();
+    }
+
+    syncHoverOverlay();
+    animateOpacityTo(kEdgeDockOpacity, edgeAnimationDurationMs());
+    animateEdgeGeometryTo(edgeDockGeometry(m_edgeDockSide), EdgeAnimStage::Docking);
+}
+
+void FloatingBoxWidget::detachEdgeDock()
+{
+    if (m_edgeDockSide == EdgeSide::None)
+        return;
+
+    const bool restoreSize = m_edgeIconMode;
+    const QRect start = geometry();
+    const QSize normalSize = m_preDockGeometry.isValid()
+                                 ? m_preDockGeometry.size()
+                                 : QSize(kDefaultWidth, kDefaultHeight);
+
+    m_edgeExpandedFromIcon = false;
+    m_edgeIconDragging = false;
+    m_edgeIconMode = false;
+    m_edgeAnimating = restoreSize;
+    m_edgeAnimStage = EdgeAnimStage::None;
+    if (m_edgeRevealTimer)
+        m_edgeRevealTimer->stop();
+    if (m_edgeRetractTimer)
+        m_edgeRetractTimer->stop();
+    if (m_dockBadge)
+        m_dockBadge->hide();
+
+    if (m_titleBar)
+        m_titleBar->show();
+    if (m_actionBar)
+        m_actionBar->show();
+    if (m_itemList)
+        m_itemList->show();
+    if (m_gripRow)
+        m_gripRow->show();
+
+    setMinimumSize(kMinimumWidth, kMinimumHeight);
+    setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+
+    if (restoreSize) {
+        QRect target(start.topLeft(), normalSize);
+        QScreen *screen = QApplication::screenAt(start.center());
+        if (!screen)
+            screen = QApplication::primaryScreen();
+        if (screen) {
+            const QRect avail = screen->availableGeometry();
+            target.moveLeft(qBound(avail.left(), target.left(),
+                                   qMax(avail.left(), avail.right() - target.width() + 1)));
+            target.moveTop(qBound(avail.top(), target.top(),
+                                  qMax(avail.top(), avail.bottom() - target.height() + 1)));
+        }
+        animateEdgeGeometryTo(target, EdgeAnimStage::Detaching);
+        return;
+    }
+
+    finishEdgeDetach();
+}
+
+void FloatingBoxWidget::finishEdgeDetach()
+{
+    m_edgeAnimating = false;
+    m_edgeAnimStage = EdgeAnimStage::None;
+    m_edgeDockSide = EdgeSide::None;
+    m_edgeIconMode = false;
+    m_edgeExpandedFromIcon = false;
+    m_preDockGeometry = QRect();
+    m_preDockGeometryBlob.clear();
+    m_service->settings()->setFloatEdgeState(m_boxName, 0, 0);
+
+    if (m_titleBar)
+        m_titleBar->show();
+    if (m_actionBar)
+        m_actionBar->show();
+    if (m_itemList)
+        m_itemList->show();
+    if (m_gripRow)
+        m_gripRow->show();
+    if (m_dockBadge)
+        m_dockBadge->hide();
+
+    setMinimumSize(kMinimumWidth, kMinimumHeight);
+    setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+    m_maskSize = QSize();
+    updateRoundedMask();
+    syncHoverOverlay();
+    refreshHoverGlow();
+    scheduleGeometrySave();
+}
+
+void FloatingBoxWidget::onEdgeRetractTimeout()
+{
+    if (!m_edgeExpandedFromIcon || m_edgeAnimating || m_edgeDockSide == EdgeSide::None)
+        return;
+    if (hoverInteractionBlocked())
+        return;
+    if (rect().contains(mapFromGlobal(QCursor::pos())))
+        return;
+
+    collapseToEdgeIcon();
+}
+
 void FloatingBoxWidget::setHoverExpandEnabled(bool on)
 {
     if (m_hoverExpandEnabled == on) {
@@ -1668,6 +2278,19 @@ void FloatingBoxWidget::enterEvent(QEnterEvent *event)
     // 关掉自动展开的浮窗就彻底没有触感了。
     refreshHoverGlow();
 
+    // 贴边图标：鼠标碰到后先等极短一拍，避免只是从边上划过就展开。
+    if (m_edgeIconMode && !m_edgeAnimating) {
+        if (m_edgeRevealTimer)
+            m_edgeRevealTimer->start();
+        return;
+    }
+    if (m_edgeAnimating) {
+        return;
+    }
+    if (m_edgeExpandedFromIcon && m_edgeRetractTimer) {
+        m_edgeRetractTimer->stop();
+    }
+
     // ⚠️⚠️ 进窗口的第一件事：**停掉离开定时器**。
     //
     // 这是整个悬停交互里最容易出的一个 bug，而且是经典形态：
@@ -1699,6 +2322,17 @@ void FloatingBoxWidget::leaveEvent(QEvent *event)
 
     // 光影触感：同样放在所有早退之前。离开就让它平滑消退。
     refreshHoverGlow();
+
+    if (m_edgeRevealTimer)
+        m_edgeRevealTimer->stop();
+    if (m_edgeIconMode || m_edgeAnimating) {
+        return;
+    }
+    if (m_edgeExpandedFromIcon) {
+        if (!hoverInteractionBlocked() && !m_rolledUp && m_edgeRetractTimer)
+            m_edgeRetractTimer->start();
+        return;
+    }
 
     // 刚离开时那个展开计时就不该继续了 —— 鼠标已经走了，
     // 到点后把窗口展开是很莫名其妙的（人都不在那儿了）。
@@ -1833,7 +2467,8 @@ void FloatingBoxWidget::syncHoverOverlay()
     }
 
     m_hoverOverlay->setHoverEffect(m_appearance.hoverEffect);
-    m_hoverOverlay->setStrength(m_appearance.feedbackStrength);
+    m_hoverOverlay->setStrength(m_edgeIconMode ? BoxAppearance::FeedbackStrength::Strong
+                                               : m_appearance.feedbackStrength);
     m_hoverOverlay->setAnimationSpeed(m_appearance.animationSpeed);
     m_hoverOverlay->setAnimationsEnabled(m_animationsOn);
     m_hoverOverlay->setCornerRadius(m_appearance.cornerRadius);
@@ -1854,8 +2489,14 @@ void FloatingBoxWidget::layoutHoverOverlay()
     // 触发浮窗自身的 resizeEvent / 遮罩重算，也不会影响让位逻辑。
     m_hoverOverlay->setGeometry(rect());
 
-    // 必须在最上层：它要盖过标题栏、列表、操作条才画得出一整圈描边。
+    // 必须在最上层：它要盖过标题栏、列表、操作条才画出一整圈描边。
     m_hoverOverlay->raise();
+
+    if (m_dockBadge) {
+        m_dockBadge->setGeometry(rect().adjusted(7, 7, -7, -7));
+        if (m_dockBadge->isVisible())
+            m_dockBadge->raise();
+    }
 }
 
 void FloatingBoxWidget::applyCornerRadiusToUi()
@@ -2001,6 +2642,8 @@ void FloatingBoxWidget::applyThemeToUi()
         m_hoverOverlay->setCornerRadius(radius);
         m_hoverOverlay->setCornerSmoothing(smoothing);
     }
+
+    updateDockBadge();
 }
 
 // ---------------------------------------------------------------------------
@@ -2014,6 +2657,13 @@ void FloatingBoxWidget::applyAppearance(const BoxAppearance &appearance)
     const bool radiusChanged = (previousCornerRadius != m_appearance.cornerRadius);
     const bool cornerSmoothingChanged = (previousCornerSmoothing
                                          != m_appearance.cornerSmoothing);
+
+    // 贴边态只跟随透明度/触感参数，不重新套用窗口尺寸和普通外观几何。
+    if (m_edgeIconMode || m_edgeAnimating || m_edgeExpandedFromIcon) {
+        syncHoverOverlay();
+        animateOpacityTo(targetOpacityFromAppearance());
+        return;
+    }
 
     // ---- 悬停触感 ----
     // 覆盖层自己不读配置，四项（开关 / 强度 / 速度 / 圆角）由这里一次性下发。
@@ -2076,6 +2726,9 @@ void FloatingBoxWidget::applyAppearance(const BoxAppearance &appearance)
 // ---------------------------------------------------------------------------
 double FloatingBoxWidget::targetOpacityFromAppearance() const
 {
+    if (m_edgeIconMode)
+        return kEdgeDockOpacity;
+
     // 夹紧规则与 applyAppearance 完全一致，抽成一份共用：
     // 若两处各写一遍，日后改了夹紧范围就会漏改一处，
     // 而症状是"淡入结束时闪一下"（终值与静态值对不上），极难定位。
@@ -2974,7 +3627,9 @@ void FloatingBoxWidget::applyRoundedMask(int w, int h)
 
     // 内缩半像素：抗锯齿的边界会落在半个像素上，不内缩的话最外一圈
     // 会被削掉一像素，圆角看着比设定值小一点。
-    const qreal radius = qMax(0, m_appearance.cornerRadius);
+    const qreal radius = m_edgeIconMode
+                             ? qMin<qreal>(18.0, qMin(w, h) / 2.0)
+                             : qMax(0, m_appearance.cornerRadius);
     const int smoothing = BoxAppearance::normalizeCornerSmoothing(
         m_appearance.cornerSmoothing);
     const QRectF maskRect = QRectF(0, 0, w, h).adjusted(0.5, 0.5, -0.5, -0.5);
@@ -3040,6 +3695,62 @@ void FloatingBoxWidget::ensureRoundedMaskCovers(int minHeight)
 // ---------------------------------------------------------------------------
 // 几何
 // ---------------------------------------------------------------------------
+void FloatingBoxWidget::restoreEdgeDockState(int side, int centerY)
+{
+    if (side < 1 || side > 2)
+        return;
+
+    m_edgeDockSide = side == 1 ? EdgeSide::Left : EdgeSide::Right;
+    m_edgeIconMode = true;
+    m_edgeExpandedFromIcon = false;
+    m_edgeCollapsingToIcon = false;
+    m_edgeAnimating = false;
+    m_preDockGeometry = geometry();
+    const int fullHeight = m_expandedHeight > rolledUpHeight()
+                               ? m_expandedHeight
+                               : qMax(geometry().height(), kMinimumHeight);
+    m_preDockGeometry.setHeight(fullHeight);
+    m_preDockGeometryBlob = saveGeometry();
+
+    setMinimumSize(0, 0);
+    setMaximumSize(QWIDGETSIZE_MAX, QWIDGETSIZE_MAX);
+    if (m_titleBar)
+        m_titleBar->hide();
+    if (m_actionBar)
+        m_actionBar->hide();
+    if (m_itemList)
+        m_itemList->hide();
+    if (m_gripRow)
+        m_gripRow->hide();
+
+    QRect target = edgeDockGeometry(m_edgeDockSide);
+    if (centerY > 0) {
+        QScreen *screen = QApplication::screenAt(QPoint(geometry().center().x(), centerY));
+        if (!screen)
+            screen = QApplication::primaryScreen();
+        if (screen) {
+            const QRect avail = screen->availableGeometry();
+            target.moveTop(qBound(avail.top() + 8,
+                                  centerY - target.height() / 2,
+                                  avail.bottom() - target.height() - 7));
+        }
+    }
+    setGeometry(target);
+    setMinimumSize(kEdgeDockSize, kEdgeDockSize);
+    setMaximumSize(kEdgeDockSize, kEdgeDockSize);
+    setOpacityImmediately(kEdgeDockOpacity);
+
+    if (m_dockBadge) {
+        m_dockBadge->setGeometry(rect().adjusted(7, 7, -7, -7));
+        m_dockBadge->show();
+        m_dockBadge->raise();
+    }
+    m_maskSize = QSize();
+    updateRoundedMask();
+    layoutHoverOverlay();
+    syncHoverOverlay();
+}
+
 void FloatingBoxWidget::applySavedGeometry(const QByteArray &blob)
 {
     if (blob.isEmpty()) {
@@ -3068,6 +3779,11 @@ void FloatingBoxWidget::applySavedGeometry(const QByteArray &blob)
 
 QByteArray FloatingBoxWidget::currentGeometryBlob() const
 {
+    // 贴边图标只是临时收纳表现，不是主人摆的位置；重启后应恢复贴边前的几何。
+    if ((m_edgeIconMode || m_edgeAnimating || m_edgeExpandedFromIcon)
+        && !m_preDockGeometryBlob.isEmpty())
+        return m_preDockGeometryBlob;
+
     // ⚠️ 正处于"被推开"状态时，落盘的必须是**原位**，不是当前位置。
     //
     // moveEvent 那边已经挡住了动画期间的主动落盘，但还有两条路绕过了它：
@@ -3116,6 +3832,10 @@ void FloatingBoxWidget::scheduleGeometrySave()
         return;
     }
 
+    // 贴边动画里的每帧几何都只是过程态，不能落盘。
+    if (m_edgeIconMode || m_edgeAnimating || m_edgeExpandedFromIcon)
+        return;
+
     // 重开定时器即实现去抖：拖动会连续触发 moveEvent，
     // 每次都 start() 会把计时推后，只有停下来 500ms 后才真正落盘。
     // 不去抖的话每像素写一次 INI，拖动会明显卡顿（QSettings 每次都要
@@ -3126,6 +3846,107 @@ void FloatingBoxWidget::scheduleGeometrySave()
 void FloatingBoxWidget::onGeometryDebounceTimeout()
 {
     emit geometryChanged(m_boxName, currentGeometryBlob());
+}
+
+void FloatingBoxWidget::mousePressEvent(QMouseEvent *event)
+{
+    if (m_edgeIconMode && event->button() == Qt::LeftButton) {
+        m_edgeIconDragging = true;
+        m_edgeIconDragOffset = event->globalPosition().toPoint() - frameGeometry().topLeft();
+        if (m_edgeRevealTimer)
+            m_edgeRevealTimer->stop();
+        event->accept();
+        return;
+    }
+    QWidget::mousePressEvent(event);
+}
+
+void FloatingBoxWidget::mouseMoveEvent(QMouseEvent *event)
+{
+    if (m_edgePreviewing && (event->buttons() & Qt::LeftButton)) {
+        move(event->globalPosition().toPoint() - m_edgePreviewDragAnchor);
+        event->accept();
+        return;
+    }
+
+    if (!m_edgeIconDragging || !(event->buttons() & Qt::LeftButton)) {
+        QWidget::mouseMoveEvent(event);
+        return;
+    }
+
+    move(event->globalPosition().toPoint() - m_edgeIconDragOffset);
+
+    QScreen *screen = QApplication::screenAt(event->globalPosition().toPoint());
+    if (!screen)
+        screen = QApplication::primaryScreen();
+    if (screen && m_edgeDockSide != EdgeSide::None) {
+        const QRect avail = screen->availableGeometry();
+        const int distance = m_edgeDockSide == EdgeSide::Left
+                                 ? frameGeometry().left() - avail.left()
+                                 : avail.right() - frameGeometry().right();
+        if (distance >= kEdgeDetachDistance) {
+            detachEdgeDock();
+            event->accept();
+            return;
+        }
+    }
+
+    event->accept();
+}
+
+void FloatingBoxWidget::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (m_edgePreviewing && event->button() == Qt::LeftButton) {
+        m_edgePreviewing = false;
+        if (QWidget::mouseGrabber() == this)
+            releaseMouse();
+
+        QScreen *screen = QApplication::screenAt(event->globalPosition().toPoint());
+        if (!screen)
+            screen = QApplication::primaryScreen();
+        EdgeSide side = EdgeSide::None;
+        if (screen) {
+            const QRect avail = screen->availableGeometry();
+            const QPoint global = event->globalPosition().toPoint();
+            const int leftDist = qAbs(global.x() - avail.left());
+            const int rightDist = qAbs(global.x() - avail.right());
+            if (leftDist <= kEdgeApproachDistance || rightDist <= kEdgeApproachDistance)
+                side = leftDist <= rightDist ? EdgeSide::Left : EdgeSide::Right;
+        }
+
+        if (side == EdgeSide::None) {
+            detachEdgeDock();
+            event->accept();
+            return;
+        }
+
+        m_edgeDockSide = side;
+        if (m_preDockGeometry.isValid()) {
+            m_preDockGeometry.moveTop(geometry().center().y() - m_preDockGeometry.height() / 2);
+        }
+        m_edgeAnimating = true;
+        m_edgeIconMode = true;
+        animateOpacityTo(kEdgeDockOpacity, edgeAnimationDurationMs());
+        animateEdgeGeometryTo(edgeDockGeometry(side), EdgeAnimStage::Docking);
+        event->accept();
+        return;
+    }
+
+    if (m_edgeIconDragging && event->button() == Qt::LeftButton) {
+        m_edgeIconDragging = false;
+        if (m_edgeIconMode && m_edgeDockSide != EdgeSide::None) {
+            if (m_preDockGeometry.isValid()) {
+                QRect updated = m_preDockGeometry;
+                updated.moveTop(geometry().center().y() - updated.height() / 2);
+                m_preDockGeometry = updated;
+            }
+            m_edgeAnimating = true;
+            animateEdgeGeometryTo(edgeDockGeometry(m_edgeDockSide), EdgeAnimStage::Docking);
+        }
+        event->accept();
+        return;
+    }
+    QWidget::mouseReleaseEvent(event);
 }
 
 void FloatingBoxWidget::moveEvent(QMoveEvent *event)
@@ -3170,7 +3991,14 @@ void FloatingBoxWidget::resizeEvent(QResizeEvent *event)
     // 缩小方向一次都不碰。animateHeightTo 启动前已经把遮罩预先撑到
     // 这段动画可能出现的最大高度，正常情况下一帧都不会走到重设分支；
     // 动画结束时由 finished 回调 settleRoundedMask() 把圆角精确复位。
-    if (m_rollAnimating) {
+    if (m_edgeAnimating) {
+        const int coverW = qMax(width(), m_preDockGeometry.width());
+        const int coverH = qMax(height(), m_preDockGeometry.height());
+        if (m_maskBitmap.isNull() || m_maskSize.width() < coverW
+            || m_maskSize.height() < coverH) {
+            applyRoundedMask(coverW, coverH);
+        }
+    } else if (m_rollAnimating) {
         ensureRoundedMaskCovers(height());
     } else {
         updateRoundedMask();
@@ -3195,7 +4023,8 @@ void FloatingBoxWidget::resizeEvent(QResizeEvent *event)
     // 唯一漏网的是"悬停展开动画结束时的最后一帧 resize"（那时 m_rollAnimating
     // 已被 finished 清掉）。那一帧的高度**就是**展开高度，记下来是对的，
     // 所以不需要为悬停再加守卫条件。
-    if (!m_rolledUp && !m_rollAnimating && !m_layoutAdjusting
+    if (!m_edgeIconMode && !m_edgeAnimating
+        && !m_rolledUp && !m_rollAnimating && !m_layoutAdjusting
         && event->size().height() > rolledUpHeight()) {
         m_expandedHeight = event->size().height();
     }

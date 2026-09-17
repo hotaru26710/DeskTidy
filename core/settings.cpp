@@ -30,6 +30,10 @@ const QString kKeyAnimations  = QStringLiteral("ui/animations");
 // 悬停自动展开总开关。同样是全局单键、同样"默认值也落键"，理由见上。
 const QString kKeyHoverExpand = QStringLiteral("ui/hoverExpand");
 
+// 贴边收纳总开关与小图标让位开关。全局单键，默认开启。
+const QString kKeyEdgeDockEnabled  = QStringLiteral("ui/edgeDockEnabled");
+const QString kKeyEdgeIconPushable = QStringLiteral("ui/edgeIconPushable");
+
 // 开机自启方式偏好。真正的启动项在注册表里，这里只记住用户选过"静默"还是"普通"。
 const QString kKeyAutoStartSilent = QStringLiteral("autostart/silent");
 
@@ -42,6 +46,12 @@ const QString kKeyFloatRollFmt =
 // 浮窗是否被"钉住"（不参与互相推开、固定在最底层）。每盒一份。
 const QString kKeyFloatLockedFmt =
     QStringLiteral("floating/locked/%1");
+
+// 贴边小图标状态（每盒一份，只存非未贴边值）。
+const QString kKeyFloatEdgeSideFmt =
+    QStringLiteral("floating/edgeSide/%1");
+const QString kKeyFloatEdgeCenterYFmt =
+    QStringLiteral("floating/edgeCenterY/%1");
 
 // 浮窗外观（每盒一份，同样带盒名占位）。
 const QString kKeyFloatViewModeFmt =
@@ -480,7 +490,10 @@ void Settings::clearFloatAppearance(const QString &boxName)
     clearFloatAppearanceOverride(boxName);
 
     QSettings ini(m_iniPath, QSettings::IniFormat);
-    ini.remove(kKeyFloatLockedFmt.arg(encodeBoxName(boxName)));
+    const QString encoded = encodeBoxName(boxName);
+    ini.remove(kKeyFloatLockedFmt.arg(encoded));
+    ini.remove(kKeyFloatEdgeSideFmt.arg(encoded));
+    ini.remove(kKeyFloatEdgeCenterYFmt.arg(encoded));
     ini.sync();
 }
 
@@ -757,6 +770,83 @@ void Settings::setHoverExpandEnabled(bool on)
     // 不用"false 就 remove"那套。否则日后主人报"我这浮窗怎么不自动展开"，
     // 翻配置分不清是他关过还是从没设过。
     ini.setValue(kKeyHoverExpand, on);
+    ini.sync();
+}
+
+// ---------------------------------------------------------------------------
+// 贴边收纳
+// ---------------------------------------------------------------------------
+bool Settings::edgeDockEnabled() const
+{
+    if (m_iniPath.isEmpty())
+        return true;
+
+    QSettings ini(m_iniPath, QSettings::IniFormat);
+    return ini.value(kKeyEdgeDockEnabled, true).toBool();
+}
+
+void Settings::setEdgeDockEnabled(bool on)
+{
+    if (m_iniPath.isEmpty())
+        return;
+
+    QSettings ini(m_iniPath, QSettings::IniFormat);
+    ini.setValue(kKeyEdgeDockEnabled, on);
+    ini.sync();
+}
+
+bool Settings::edgeIconPushable() const
+{
+    if (m_iniPath.isEmpty())
+        return true;
+
+    QSettings ini(m_iniPath, QSettings::IniFormat);
+    return ini.value(kKeyEdgeIconPushable, true).toBool();
+}
+
+void Settings::setEdgeIconPushable(bool on)
+{
+    if (m_iniPath.isEmpty())
+        return;
+
+    QSettings ini(m_iniPath, QSettings::IniFormat);
+    ini.setValue(kKeyEdgeIconPushable, on);
+    ini.sync();
+}
+
+int Settings::floatEdgeSide(const QString &boxName) const
+{
+    if (m_iniPath.isEmpty() || boxName.isEmpty())
+        return 0;
+
+    QSettings ini(m_iniPath, QSettings::IniFormat);
+    const int side = ini.value(kKeyFloatEdgeSideFmt.arg(encodeBoxName(boxName)), 0).toInt();
+    return (side >= 1 && side <= 2) ? side : 0;
+}
+
+int Settings::floatEdgeCenterY(const QString &boxName) const
+{
+    if (m_iniPath.isEmpty() || boxName.isEmpty())
+        return 0;
+
+    QSettings ini(m_iniPath, QSettings::IniFormat);
+    return ini.value(kKeyFloatEdgeCenterYFmt.arg(encodeBoxName(boxName)), 0).toInt();
+}
+
+void Settings::setFloatEdgeState(const QString &boxName, int side, int centerY)
+{
+    if (m_iniPath.isEmpty() || boxName.isEmpty())
+        return;
+
+    QSettings ini(m_iniPath, QSettings::IniFormat);
+    const QString encoded = encodeBoxName(boxName);
+    if (side >= 1 && side <= 2) {
+        ini.setValue(kKeyFloatEdgeSideFmt.arg(encoded), side);
+        ini.setValue(kKeyFloatEdgeCenterYFmt.arg(encoded), centerY);
+    } else {
+        ini.remove(kKeyFloatEdgeSideFmt.arg(encoded));
+        ini.remove(kKeyFloatEdgeCenterYFmt.arg(encoded));
+    }
     ini.sync();
 }
 

@@ -106,6 +106,8 @@ public:
     // 用查询比用信号少一份需要自己维护同步的标志。
     bool isDragging() const { return m_dragging; }
 
+    void cancelDrag() { m_dragging = false; }
+
 signals:
     void doubleClicked();            // 双击标题栏 = 卷起/展开
     void closeClicked();
@@ -137,6 +139,7 @@ signals:
     // 而这件事需要一个瞬时事件。isDragging() 只能被反过来问，问不出"刚开始"。
     // 结束时浮窗再按"鼠标是否还在窗口里"决定要不要恢复光影。
     void dragStarted();
+    void dragMoved(const QPoint &globalPos);
     void dragFinished();
 
 protected:
@@ -225,6 +228,9 @@ public:
 
     // 当前几何的 blob，供 FloatingBoxManager 落盘。
     QByteArray currentGeometryBlob() const;
+
+    // 启动时恢复上次退出前的贴边小图标状态。side: 0=无，1=左，2=右。
+    void restoreEdgeDockState(int side, int centerY);
 
     // 撤稿按钮随全局撤销栈状态更新（由 manager 在 undoStateChanged 时调用）。
     void updateUndoButton();
@@ -352,6 +358,14 @@ public:
     // 挡不住谁，不该触发推开。
     bool isRolledUp() const { return m_rolledUp; }
 
+    // 是否正处于贴边图标态。贴着屏幕边缘时会缩成一个小方块，
+    // 不参与浮窗让位，也不把贴边几何写回配置。
+    bool isEdgeDocked() const { return m_edgeIconMode; }
+
+    // 是否仍与屏幕边缘保持附着关系（包括从图标临时展开的窗口）。
+    // manager 用它在贴边关系存续期间跳过普通让位，避免快速悬停多个浮窗时打架。
+    bool isEdgeAttached() const { return m_edgeIconMode || m_edgeExpandedFromIcon; }
+
     // ---- 钉住（锁定）----
     //
     // 钉住 = "这个窗口别动我"。三件事一起生效：
@@ -425,6 +439,9 @@ signals:
 protected:
     void moveEvent(QMoveEvent *event) override;
     void resizeEvent(QResizeEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseMoveEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
     void contextMenuEvent(QContextMenuEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
 
@@ -458,8 +475,36 @@ private slots:
     void onHoverExpandTimeout();
     void onHoverCollapseTimeout();
 
+    // 鼠标停在贴边图标上后，先弹标题条再展开。
+    void onEdgeRevealTimeout();
+
+    // 鼠标离开、且没有拖离边缘时，平滑收回小图标。
+    void onEdgeRetractTimeout();
+
 private:
     void buildUi();
+
+    // ---- 贴边收纳态 ----
+    enum class EdgeSide { None, Left, Right };
+    enum class EdgeAnimStage { None, Previewing, Docking, RevealingHeader, Detaching };
+
+    void handleDragFinished();
+    void startEdgeDock(EdgeSide side);
+    void beginEdgePreview(EdgeSide side, const QPoint &globalPos);
+    void undockFromEdge();
+    void collapseToEdgeIcon();
+    void detachEdgeDock();
+    void animateEdgeGeometryTo(const QRect &target, EdgeAnimStage stage);
+    void finishEdgeDock();
+    void finishEdgeHeaderReveal();
+    void finishEdgeRestore();
+    void finishEdgeRollUp();
+    void finishEdgeDetach();
+    QRect edgeDockGeometry(EdgeSide side) const;
+    QRect edgeHeaderGeometry(EdgeSide side) const;
+    int edgeAnimationDurationMs() const;
+    void updateDockBadge();
+    void persistEdgeDockState();
 
     // 按 m_theme 重新套用所有颜色相关样式。尺寸、透明度和动画状态不变。
     void applyThemeToUi();
@@ -833,6 +878,25 @@ private:
     // 见 ensureRoundedMaskCovers / settleRoundedMask。
     QBitmap m_maskBitmap;
     QSize   m_maskSize;
+
+    // ---- 贴边收纳态 ----
+
+    EdgeSide m_edgeDockSide = EdgeSide::None;
+    EdgeAnimStage m_edgeAnimStage = EdgeAnimStage::None;
+    bool m_edgeIconMode = false;
+    bool m_edgeAnimating = false;
+    bool m_edgeExpandedFromIcon = false;
+    bool m_edgePreviewing = false;
+    bool m_edgeCollapsingToIcon = false;
+    QPoint m_edgePreviewDragAnchor;
+    bool m_edgeIconDragging = false;
+    QPoint m_edgeIconDragOffset;
+    QRect m_preDockGeometry;
+    QByteArray m_preDockGeometryBlob;
+    QLabel *m_dockBadge = nullptr;
+    QPropertyAnimation *m_edgeAnim = nullptr;
+    QTimer *m_edgeRevealTimer = nullptr;
+    QTimer *m_edgeRetractTimer = nullptr;
 
     // ---- 动画状态 ----
 
